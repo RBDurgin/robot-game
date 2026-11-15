@@ -31,6 +31,14 @@ export class WreckField {
     return this.wrecks.length;
   }
 
+  /** Compile the wreck shaders now rather than in the frame of the first kill. */
+  async prewarm(): Promise<void> {
+    this.spawn(new Vector3(0, -1000, 0), 0, 4.6);
+    const wreck = this.wrecks.pop()!;
+    await Promise.all(wreck.getChildMeshes().map((mesh) => mesh.material!.forceCompilationAsync(mesh)));
+    wreck.dispose();
+  }
+
   /** `ground` is the point on the terrain under the mech; `height` is the mech's height. */
   spawn(ground: Vector3, yaw: number, height: number): void {
     const root = new TransformNode("wreck", this.scene);

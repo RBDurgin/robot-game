@@ -15,6 +15,7 @@ first" questions with the user.
 - `npm run e2e`: Playwright tests in headless Chromium; writes screenshots to `tests/e2e/screenshots/`
 - `npm run build`: typecheck + production build to `dist/`
 - `npm run check`: typecheck, unit tests and e2e in one go
+- `npm run trace -- perf/<file>`: summarise a Chrome Performance trace (see "Dev tools in the game")
 
 Run `npm run check` after any gameplay change, and look at the screenshots.
 
@@ -56,3 +57,9 @@ Key seams:
 ## Dev tools in the game
 
 Backquote (`) toggles a stats overlay and live sliders for the player frame's handling values.
+
+Profiling: open the game with `?profile` in the URL. It records per-frame timings and counters
+(`src/game/perf.ts`) and the dev server saves them to `perf/` (ignored by git) each time a menu
+opens, so play, then press Esc. `npm run trace -- perf/<file>` summarises the file. With
+`?profile=devtools` the same spans also go to Chrome's Performance panel, and a trace saved from
+there can be summarised the same way; untick Screenshots there, which costs about 25 fps.

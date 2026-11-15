@@ -28,6 +28,14 @@ export class SalvageField {
     return this.crates.length;
   }
 
+  /** Compile the crate shader now rather than in the frame of the first kill. */
+  async prewarm(): Promise<void> {
+    const mesh = MeshBuilder.CreateBox("salvageCrate", { size: 1.6 }, this.scene);
+    mesh.material = this.material;
+    await this.material.forceCompilationAsync(mesh);
+    mesh.dispose();
+  }
+
   spawn(at: Vector3, drop: LootDrop): void {
     const mesh = MeshBuilder.CreateBox("salvageCrate", { size: 1.6 }, this.scene);
     mesh.position.copyFrom(at);

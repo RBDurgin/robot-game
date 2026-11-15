@@ -2,3 +2,4 @@ node_modules
 dist/
 test-results/
 tests/e2e/screenshots/
+perf/

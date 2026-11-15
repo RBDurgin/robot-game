@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",
-    "check": "npm run typecheck && npm test && npm run e2e"
+    "check": "npm run typecheck && npm test && npm run e2e",
+    "trace": "node scripts/analyze-trace.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^9.36.0",

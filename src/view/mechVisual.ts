@@ -139,6 +139,15 @@ export class MechVisual {
     this.backpack.setPose({ thrust: input.thrust });
   }
 
+  /** Compile every shader this mech can be drawn with, including the thruster flames. */
+  async prewarm(): Promise<void> {
+    this.backpack.setPose({ thrust: 1 });
+    const meshes = this.root.getChildMeshes();
+    for (const mesh of meshes) mesh.computeWorldMatrix(true);
+    await Promise.all(meshes.map((mesh) => (mesh.material ? mesh.material.forceCompilationAsync(mesh) : null)));
+    this.backpack.setPose({ thrust: 0 });
+  }
+
   dispose(): void {
     this.root.dispose(false, false);
   }

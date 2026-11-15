@@ -23,6 +23,7 @@ import { CameraRig } from "./camera/cameraRig";
 import { Combat } from "./combat";
 import { PlayerInput } from "./input";
 import { MechEntity } from "./mechEntity";
+import { perfEnd, perfMark, perfStart } from "./perf";
 import { enablePhysics, raycastWorld, stepPhysics } from "./physics";
 import { SalvageField } from "./salvage";
 import { loadSave, writeSave, type SaveData, type Settings } from "./save";
@@ -182,7 +183,10 @@ export class World {
     input.yaw = spawnYaw;
     input.pitch = -0.1;
 
-    return new World(scene, zone, input, new CameraRig(scene), new Hud(scene), new Screens(overlay), player, save);
+    const world = new World(scene, zone, input, new CameraRig(scene), new Hud(scene), new Screens(overlay), player, save);
+    // Compile the shaders that are first needed mid-fight, while the start screen is up.
+    await Promise.all([world.effects.prewarm(), world.wrecks.prewarm(), world.salvage.prewarm(), player.visual.prewarm()]);
+    return world;
   }
 
   static groundPoint(zone: ZoneDef, x: number, z: number, lift = 0): Vec3 {
@@ -328,6 +332,7 @@ export class World {
   }
 
   private onKill(victim: MechEntity, attacker: MechEntity): void {
+    perfMark("kill");
     // Mechs can die in the air; the wreck and its salvage come to rest on the ground below.
     const ground = this.groundBelow(victim.center);
     this.wrecks.spawn(ground, victim.state.legsYaw, victim.frame.height);
@@ -416,6 +421,7 @@ export class World {
     if (this.mode !== "playing") return;
     this.tick++;
 
+    let t = perfStart();
     if (this.player.alive) {
       const ray = this.cameraRig.aimRay(this.input.yaw, this.input.pitch);
       const hit = this.combat.trace(ray.origin, ray.direction, 600, this.player);
@@ -440,6 +446,9 @@ export class World {
       if (this.respawnTimer <= 0) this.respawnPlayer();
     }
 
+    perfEnd("step.player", t);
+    t = perfStart();
+
     // Only a few of the pilots in the fight may fire at once; see ENEMY_TUNING.maxAttackers.
     const fighting = this.mechs.filter((m) => m.brain && m.alive && m.brain.state.mode !== "patrol");
     this.attackers = pickAttackers(
@@ -457,8 +466,13 @@ export class World {
       this.combat.stepMech(mech, intent);
     }
 
+    perfEnd("step.ai", t);
+    t = perfStart();
     this.combat.step(dt);
+    perfEnd("step.projectiles", t);
+    t = perfStart();
     stepPhysics(this.scene);
+    perfEnd("step.physics", t);
 
     // Clear away destroyed enemies.
     for (let i = this.mechs.length - 1; i >= 0; i--) {
@@ -513,6 +527,7 @@ export class World {
   /** Per-frame visual update. `alpha` is the fraction of a step since the last simulation step. */
   render(alpha: number, frameDt: number): void {
     const playing = this.mode === "playing";
+    let t = perfStart();
     for (const mech of this.mechs) mech.renderUpdate(playing ? alpha : 1, playing ? frameDt : 0);
     this.cameraRig.update(this.player, this.input.yaw, this.input.pitch, frameDt);
     if (playing) {
@@ -525,6 +540,8 @@ export class World {
       this.sfx.setThrust(!this.player.alive ? 0 : s.boostTime > 0 ? 1 : s.jetting ? 0.7 : 0);
     }
 
+    perfEnd("visuals", t);
+    t = perfStart();
     const s = this.player.state;
     const left = this.enemies.length;
     const goal = this.phase === "assault" ? this.zone.enemyOutpost : this.zone.playerBase;
@@ -558,6 +575,9 @@ export class World {
       info: this.infoText(),
       radar: this.radarBlips(),
     });
+    perfEnd("hud", t);
+    t = perfStart();
     this.scene.render();
+    perfEnd("scene.render", t);
   }
 }

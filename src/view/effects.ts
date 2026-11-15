@@ -23,6 +23,38 @@ export class Effects {
 
   constructor(private readonly scene: Scene) {}
 
+  /** Effects currently on screen. */
+  get activeCount(): number {
+    return this.active.length;
+  }
+
+  /**
+   * Compile the shaders for every kind of effect now, in each state it is drawn in (opaque and
+   * fading). Otherwise they compile the first time something fires, which stalls a frame or two
+   * at the start of the first fight.
+   */
+  async prewarm(): Promise<void> {
+    const samples: Mesh[] = [];
+    for (const kind of ["tracer", "spark", "blast", "dust"] as const) {
+      for (const visibility of [1, 0.5]) {
+        const mesh = this.acquire(kind);
+        mesh.material = this.glow(0xffffff);
+        mesh.visibility = visibility;
+        // Tracers and dust are stretched when drawn, which is a different shader variant.
+        if (kind === "tracer" || kind === "dust") mesh.scaling.set(1, 1, 5);
+        mesh.computeWorldMatrix(true);
+        samples.push(mesh);
+      }
+    }
+    const shell = this.acquireShell(0xffffff);
+    await Promise.all([...samples, shell].map((mesh) => mesh.material!.forceCompilationAsync(mesh)));
+    samples.forEach((mesh, i) => {
+      mesh.setEnabled(false);
+      this.pools[(["tracer", "spark", "blast", "dust"] as const)[i >> 1]!].push(mesh);
+    });
+    this.releaseShell(shell);
+  }
+
   private glow(hex: number): StandardMaterial {
     let mat = this.materials.get(hex);
     if (!mat) {

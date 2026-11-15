@@ -95,4 +95,12 @@ Playtest round 3 (2026-11-15):
 
 Signed off on 2026-11-15: handling, camera and weapons stay as they are.
 
-Carried forward: the cause of the occasional frame hitch in a fight (worst about 34 fps) is unknown. Profile it in Chrome on the user's machine before phase 2 adds more mechs.
+Profiled (2026-11-15) on the user's machine with the in-game recorder (`?profile`, see `CLAUDE.md`): 80 s of play including a five-mech fight and one kill.
+
+- **Fights hold 60 fps with headroom.** In the fight, 1 frame in 2,779 was late. Game JavaScript averages 3.5 ms a frame (simulation 0.7 ms, scene render 2.6 ms) and the GPU 1.9 ms, against a 16.7 ms budget. The earlier 54 to 56 fps reading did not reproduce; it was read from the backquote overlay, which may itself have cost the frames (not confirmed).
+- **First shots: two frames of about 31 ms.** Two shader variants for the weapon effects compile the first time anything fires (render 23 ms that frame). This matches the "worst about 34 fps" reading. Fix: compile the effect, wreck and salvage materials at load.
+- **A kill costs one 11.5 ms simulation step** (wreck and crate creation, disposing the mech), giving a 19 ms frame. Small now, but it scales with kills per second in later phases. Fix when it matters: pool wrecks and spread the disposal.
+- **Occasional full garbage collections pause the game.** A DevTools trace of a second fight (58 s) showed two: 60 ms and 17.5 ms, each dropping one to four frames. Most of the 60 ms was the browser clearing its own short-lived objects (not game data); the profiling spans add 540 such objects a second, so the pause is probably shorter in normal play, where one unexplained 40 ms frame in 80 s is the likely equivalent. The game's own sources are the debug text rewritten every frame even when hidden (`src/main.ts`) and the audio nodes made per sound. Small collections are harmless (under 2 ms).
+- **Not causes:** the HUD texture upload, AI (0.37 ms a step with five mechs fighting), physics.
+- **Fixed so far:** the effect, thruster-flame, wreck and salvage shaders now compile at load (`prewarm` in `src/view/effects.ts`, `wreck.ts`, `mechVisual.ts`, `src/game/salvage.ts`); a scripted fight with a kill compiles none mid-fight. The debug text is only written while the overlay is open, five times a second. Confirmed on the user's machine: 94 s of play with 3 kills had no slow frame at all (worst 22.4 ms, no dropped frame), no shader compiled mid-fight, and the heaviest frame used 11.7 ms of game code, so the kill frame now fits the budget too. No long garbage-collection pause appeared, though one run cannot show they are gone.
+- DevTools' Performance panel with Screenshots on drops the game to about 35 fps on its own; untick it.
