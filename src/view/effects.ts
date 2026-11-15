@@ -1,6 +1,6 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
 
-type Kind = "tracer" | "spark" | "blast";
+type Kind = "tracer" | "spark" | "blast" | "dust";
 
 interface Active {
   mesh: Mesh;
@@ -17,7 +17,7 @@ function hexColor(hex: number): Color3 {
 /** Short-lived combat visuals (tracers, impact sparks, explosions, shells), pooled to avoid churn. */
 export class Effects {
   private readonly active: Active[] = [];
-  private readonly pools: Record<Kind, Mesh[]> = { tracer: [], spark: [], blast: [] };
+  private readonly pools: Record<Kind, Mesh[]> = { tracer: [], spark: [], blast: [], dust: [] };
   private readonly shellPool: Mesh[] = [];
   private readonly materials = new Map<number, StandardMaterial>();
 
@@ -43,7 +43,7 @@ export class Effects {
     const mesh =
       kind === "tracer"
         ? MeshBuilder.CreateBox("tracer", { width: 0.12, height: 0.12, depth: 1 }, this.scene)
-        : MeshBuilder.CreateSphere(kind, { diameter: 1, segments: kind === "blast" ? 10 : 4 }, this.scene);
+        : MeshBuilder.CreateSphere(kind, { diameter: 1, segments: kind === "spark" ? 4 : 10 }, this.scene);
     mesh.isPickable = false;
     mesh.applyFog = false;
     return mesh;
@@ -74,6 +74,11 @@ export class Effects {
     this.spawn("blast", 0.4, radius * 2, hex).position.copyFrom(at);
   }
 
+  /** Low, spreading puff kicked up where a mech lands. */
+  dust(at: Vector3, radius: number): void {
+    this.spawn("dust", 0.55, radius * 2, 0x9a8f7c).position.copyFrom(at);
+  }
+
   /** A visible shell for a projectile; return it with releaseShell when the projectile ends. */
   acquireShell(hex: number): Mesh {
     const mesh = this.shellPool.pop() ?? MeshBuilder.CreateBox("shell", { width: 0.35, height: 0.35, depth: 1.1 }, this.scene);
@@ -101,6 +106,10 @@ export class Effects {
       }
       if (fx.kind === "spark") {
         fx.mesh.scaling.setAll(fx.size * (1 - t));
+      } else if (fx.kind === "dust") {
+        const d = fx.size * (0.35 + 0.65 * Math.sqrt(t));
+        fx.mesh.scaling.set(d, d * 0.18, d);
+        fx.mesh.visibility = 0.5 * (1 - t);
       } else if (fx.kind === "blast") {
         fx.mesh.scaling.setAll(fx.size * (0.3 + 0.7 * Math.sqrt(t)));
         fx.mesh.visibility = 1 - t * t;

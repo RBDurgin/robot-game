@@ -81,8 +81,12 @@ export interface HudState {
   heading: number;
   /** Bearing and distance to the current objective, if any. */
   waypoint: { bearing: number; distance: number; label: string } | null;
+  /** Heat fraction at which the pre-lockout warning starts. */
+  heatWarnAt: number;
   /** 0..1, set to 1 when the player lands a hit. */
   hitFlash: number;
+  /** 0..1, set to 1 when the player destroys a mech. */
+  killFlash: number;
   /** 0..1, set to 1 when the player takes damage. */
   damageFlash: number;
   /** Lines shown above the radar (weapons, scrap, prompts). */
@@ -113,6 +117,8 @@ export class Hud {
   private readonly targetPanel: StackPanel;
   private readonly cockpitFrame: Control[] = [];
   private readonly crosshair: Rectangle[] = [];
+  private readonly hitMarker: Rectangle[] = [];
+  private readonly heatAlert: TextBlock;
   private readonly sectionTexts = new Map<SectionId, TextBlock>();
   private readonly objective: TextBlock;
   private readonly compass: TextBlock;
@@ -146,6 +152,37 @@ export class Hud {
       this.ui.addControl(line);
       this.crosshair.push(line);
     }
+
+    // Hit marker: four diagonal ticks around the crosshair, shown briefly on a hit.
+    for (const [sx, sy] of [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ] as const) {
+      const tick = new Rectangle("hitMarker");
+      tick.width = "12px";
+      tick.height = "2px";
+      tick.thickness = 0;
+      tick.rotation = (sx * sy * Math.PI) / 4;
+      tick.left = `${sx * 13}px`;
+      tick.top = `${sy * 13}px`;
+      tick.alpha = 0;
+      tick.isHitTestVisible = false;
+      this.ui.addControl(tick);
+      this.hitMarker.push(tick);
+    }
+
+    // Heat warning, just under the crosshair where it cannot be missed mid-fight.
+    this.heatAlert = text("heatAlert", 16, "#ff4b3a");
+    this.heatAlert.top = "64px";
+    this.heatAlert.height = "24px";
+    this.heatAlert.fontWeight = "bold";
+    this.heatAlert.outlineWidth = 3;
+    this.heatAlert.outlineColor = "#000000";
+    this.heatAlert.isHitTestVisible = false;
+    this.heatAlert.isVisible = false;
+    this.ui.addControl(this.heatAlert);
 
     // Top centre: compass, objective, transient message, target panel.
     const top = new StackPanel("top");
@@ -294,7 +331,24 @@ export class Hud {
 
   update(state: HudState): void {
     this.energy.set(state.energy);
-    this.heat.set(state.heat, state.overheated, state.overheated ? "OVERHEAT - WEAPONS LOCKED" : "HEAT");
+    // Blink twice a second; the warning phase blinks the bar only, the lockout blinks everything.
+    const blink = Math.floor(performance.now() / 250) % 2 === 0;
+    const hot = !state.overheated && state.heat >= state.heatWarnAt;
+    this.heat.set(
+      state.heat,
+      state.overheated || (hot && blink),
+      state.overheated ? "OVERHEAT - WEAPONS LOCKED" : `HEAT ${Math.round(state.heat * 100)}%`,
+    );
+    this.heatAlert.isVisible = state.overheated || hot;
+    if (state.overheated) {
+      this.heatAlert.text = "OVERHEAT - WEAPONS LOCKED";
+      this.heatAlert.color = "#ff4b3a";
+      this.heatAlert.alpha = blink ? 1 : 0.35;
+    } else if (hot) {
+      this.heatAlert.text = "HEAT CRITICAL";
+      this.heatAlert.color = "#ffa630";
+      this.heatAlert.alpha = 1;
+    }
     for (const c of this.cockpitFrame) c.isVisible = state.cockpit;
 
     for (const [id, label] of SECTION_LABELS) {
@@ -304,8 +358,22 @@ export class Hud {
       t.color = sectionColor(f);
     }
 
-    const cross = state.hitFlash > 0.05 ? "#ff5a4a" : "rgba(255,255,255,0.85)";
+    // Crosshair greys out while weapons are locked. Hits show as ticks: white, or red and
+    // wider for a kill.
+    const cross = state.overheated ? "rgba(255,75,58,0.55)" : "rgba(255,255,255,0.85)";
     for (const line of this.crosshair) line.background = cross;
+    const kill = state.killFlash > 0.02;
+    const spread = kill ? 13 + 8 * state.killFlash : 13 + 4 * (1 - state.hitFlash);
+    this.hitMarker.forEach((tick, i) => {
+      const sx = i === 0 || i === 3 ? -1 : 1;
+      const sy = i < 2 ? -1 : 1;
+      tick.alpha = Math.min(1, Math.max(state.hitFlash, state.killFlash) * 1.5);
+      tick.background = kill ? "#ff5a4a" : "#ffffff";
+      tick.width = kill ? "16px" : "12px";
+      tick.height = kill ? "3px" : "2px";
+      tick.left = `${sx * spread}px`;
+      tick.top = `${sy * spread}px`;
+    });
     this.damageVeil.alpha = Math.min(0.35, state.damageFlash * 0.35);
 
     const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;

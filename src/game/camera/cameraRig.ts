@@ -19,6 +19,8 @@ export class CameraRig {
   /** How far along the view ray the aim trace starts, so it begins beyond the player's own mech. */
   private aimStart = THIRD.distance;
   private shakeAmount = 0;
+  /** Camera position before shake, so a kick does not move the aim point. */
+  private readonly steady = new Vector3();
 
   constructor(private readonly scene: Scene) {
     this.camera = new FreeCamera("playerCamera", new Vector3(0, 10, -10), scene);
@@ -26,6 +28,7 @@ export class CameraRig {
     this.camera.maxZ = 2000;
     this.camera.fov = THIRD.fov;
     this.camera.inputs.clear();
+    this.steady.copyFrom(this.camera.position);
     scene.activeCamera = this.camera;
   }
 
@@ -40,7 +43,7 @@ export class CameraRig {
   }
 
   /** Place the camera for this frame. Call after the target's visual has been updated. */
-  update(target: MechEntity, yaw: number, pitch: number): void {
+  update(target: MechEntity, yaw: number, pitch: number, frameDt: number): void {
     const f = forwardFromYawPitch(yaw, pitch);
     const forward = new Vector3(f.x, f.y, f.z);
 
@@ -71,10 +74,12 @@ export class CameraRig {
       this.aimStart = Vector3.Distance(this.camera.position, pivot) + target.frame.radius + 0.5;
     }
     this.camera.rotation.set(-pitch, yaw, 0);
+    this.steady.copyFrom(this.camera.position);
     if (this.shakeAmount > 0.01) {
       const k = this.shakeAmount;
       this.camera.position.addInPlaceFromFloats((Math.random() - 0.5) * k, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
-      this.shakeAmount *= 0.86;
+      // Decay by time, not by frame, so the kick lasts as long at 144 Hz as at 60 Hz.
+      this.shakeAmount *= Math.pow(0.86, frameDt * 60);
     }
   }
 
@@ -82,7 +87,7 @@ export class CameraRig {
   aimRay(yaw: number, pitch: number): { origin: Vector3; direction: Vector3; far: Vector3 } {
     const f = forwardFromYawPitch(yaw, pitch);
     const direction = new Vector3(f.x, f.y, f.z);
-    const origin = this.camera.position.add(direction.scale(this.aimStart));
+    const origin = this.steady.add(direction.scale(this.aimStart));
     return { origin, direction, far: origin.add(direction.scale(AIM_RANGE)) };
   }
 }

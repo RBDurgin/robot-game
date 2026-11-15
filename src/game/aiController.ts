@@ -24,6 +24,8 @@ export class AiController {
     private readonly patrol: Vec3[],
     private readonly home: Vec3,
     patrolIndex: number,
+    /** Pilots in the same squad share alarms. */
+    readonly squadId: string,
     private readonly cfg: AiConfig = DEFAULT_AI,
   ) {
     this.state = createAiState(patrolIndex);
@@ -33,7 +35,10 @@ export class AiController {
     this.state.alerted = true;
   }
 
-  think(self: MechEntity, mechs: readonly MechEntity[], scene: Scene, tick: number, dt: number, rng: () => number): Intent {
+  /** Distance to the nearest living hostile, as of the last think. */
+  targetDistance = Infinity;
+
+  think(self: MechEntity, mechs: readonly MechEntity[], scene: Scene, tick: number, dt: number, rng: () => number, weaponsFree: boolean): Intent {
     let target: MechEntity | null = null;
     let best = Infinity;
     for (const other of mechs) {
@@ -44,6 +49,8 @@ export class AiController {
         target = other;
       }
     }
+
+    this.targetDistance = Math.sqrt(best);
 
     const eye = new Vector3(self.feet.x, self.feet.y + self.frame.height * 0.7, self.feet.z);
     if (tick % SENSE_INTERVAL === this.phase) {
@@ -66,6 +73,7 @@ export class AiController {
         heatFrac: self.state.heat / self.frame.heatCapacity,
         energyFrac: self.state.energy / self.frame.energyMax,
         target: target ? { center: target.center, vel: target.state.vel, visible: this.targetVisible } : null,
+        weaponsFree,
         blockedAhead: this.blockedAhead,
         patrol: this.patrol,
         home: this.home,

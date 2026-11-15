@@ -14,8 +14,9 @@ first" questions with the user.
 - `npm test`: Vitest unit tests for the simulation layer (fast, no browser)
 - `npm run e2e`: Playwright tests in headless Chromium; writes screenshots to `tests/e2e/screenshots/`
 - `npm run build`: typecheck + production build to `dist/`
+- `npm run check`: typecheck, unit tests and e2e in one go
 
-Run typecheck, unit tests and e2e after any gameplay change, and look at the screenshots.
+Run `npm run check` after any gameplay change, and look at the screenshots.
 
 ## Architecture
 
@@ -45,6 +46,11 @@ Key seams:
 - Headless Chromium stalls after taking pointer lock, so `PlayerInput.lockPointer` is skipped when
   `navigator.webdriver` is set. Tests drive the mech through `world.intentOverride` and the
   `window.__game` debug handle instead of real mouse input.
+- `node_modules` is shared between the macOS host and the Linux dev container. TypeScript, rolldown
+  and lightningcss ship one native package per platform, so tools fail in whichever environment did
+  not run the install. Add the missing platform's packages next to the existing ones (same versions
+  as `package-lock.json`) rather than reinstalling, which can remove the other platform's.
+- Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 
 ## Dev tools in the game

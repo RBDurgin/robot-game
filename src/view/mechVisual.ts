@@ -20,6 +20,8 @@ export type ArmSide = "armL" | "armR";
 export interface MechAnimInput {
   /** Feet position in world space. */
   position: Vector3;
+  /** Walk cycle phase in radians, from the simulation so footfall sounds match the legs. */
+  walkPhase: number;
   legsYaw: number;
   torsoYaw: number;
   torsoPitch: number;
@@ -49,7 +51,6 @@ export class MechVisual {
   private readonly arms: Record<ArmSide, PartVisual>;
   private readonly weapons: Partial<Record<ArmSide, PartVisual>> = {};
   private readonly recoil: Record<ArmSide, number> = { armL: 0, armR: 0 };
-  private walkPhase = 0;
   private airborne = 0;
 
   constructor(
@@ -128,10 +129,8 @@ export class MechVisual {
     this.torsoPivot.rotation.y = input.torsoYaw - input.legsYaw;
 
     const stride = input.grounded ? Math.min(1, input.speed / input.walkSpeed) : 0;
-    // One full cycle (two steps) covers about 5.5 m of ground.
-    this.walkPhase += ((input.speed * dt) / 5.5) * Math.PI * 2 * (input.grounded ? 1 : 0);
     this.airborne += ((input.grounded ? 0 : 1) - this.airborne) * Math.min(1, dt * 8);
-    this.legs.setPose({ walkPhase: this.walkPhase, stride, airborne: this.airborne });
+    this.legs.setPose({ walkPhase: input.walkPhase, stride, airborne: this.airborne });
 
     for (const side of ["armL", "armR"] as const) {
       this.recoil[side] = Math.max(0, this.recoil[side] - dt * 6);

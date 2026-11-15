@@ -1,12 +1,14 @@
 import { Color3, Color4, DirectionalLight, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { ENEMY_TUNING, SLICE_SQUADS } from "../data/encounters";
 import { FACTIONS } from "../data/factions";
+import { FEEL } from "../data/feel";
 import { FRAMES, SECTION_IDS, type SectionId } from "../data/frames";
 import { ENEMY_LOADOUTS, type Loadout } from "../data/loadouts";
 import { SLICE_ZONE, type ZoneDef } from "../data/zone";
 import { healthFraction, sectionFraction } from "../sim/damage";
 import type { Intent } from "../sim/intent";
 import { addItem, itemName } from "../sim/loadout";
+import { pickAttackers } from "../sim/ai/squad";
 import { rollLoot } from "../sim/loot";
 import { makeRng, type Vec3 } from "../sim/math";
 import { heightAt } from "../sim/terrain";
@@ -15,18 +17,21 @@ import { Effects } from "../view/effects";
 import { Hud, type RadarBlip } from "../view/hud/hud";
 import { Screens } from "../view/screens";
 import { buildStructures, buildTerrain } from "../view/terrain";
+import { WreckField } from "../view/wreck";
 import { AiController } from "./aiController";
 import { CameraRig } from "./camera/cameraRig";
 import { Combat } from "./combat";
 import { PlayerInput } from "./input";
 import { MechEntity } from "./mechEntity";
-import { enablePhysics, stepPhysics } from "./physics";
+import { enablePhysics, raycastWorld, stepPhysics } from "./physics";
 import { SalvageField } from "./salvage";
 import { loadSave, writeSave, type SaveData, type Settings } from "./save";
 
 const SKY = new Color3(0.62, 0.71, 0.8);
 const RESPAWN_DELAY = 3.5;
-const ALERT_RADIUS = 120;
+/** Damage in one hit that counts as a heavy blow for feedback (sound, shake). */
+const HEAVY_HIT = 45;
+const SECTION_NAMES: Record<SectionId, string> = { torso: "torso", armL: "left arm", armR: "right arm", legs: "legs" };
 
 /** paused: menu open. hangar: refitting at base. complete: mission summary showing. */
 export type GameMode = "playing" | "paused" | "hangar" | "complete";
@@ -39,6 +44,7 @@ export class World {
   readonly effects: Effects;
   readonly combat: Combat;
   readonly salvage: SalvageField;
+  readonly wrecks: WreckField;
   readonly sfx = new Sfx();
   readonly rng: () => number;
   readonly save: SaveData;
@@ -57,6 +63,12 @@ export class World {
   private respawnTimer = 0;
   private hitFlash = 0;
   private damageFlash = 0;
+  private killFlash = 0;
+  /** Enemy pilots currently allowed to fire. */
+  private attackers = new Set<MechEntity>();
+  /** Player heat state last step, to spot the moment a warning should sound. */
+  private wasHot = false;
+  private wasOverheated = false;
   private message: { text: string; time: number } | null = null;
   private readonly spawnYaw: number;
 
@@ -74,23 +86,30 @@ export class World {
     this.rng = makeRng(zone.seed);
     this.effects = new Effects(scene);
     this.salvage = new SalvageField(scene);
+    this.wrecks = new WreckField(scene, FEEL.maxWrecks);
     this.spawnYaw = player.state.torsoYaw;
     this.mechs.push(player);
 
     this.combat = new Combat(scene, this.effects, () => this.mechs, this.rng, {
-      onDamage: (victim, attacker) => {
+      onDamage: (victim, attacker, amount, result) => {
+        const strength = Math.min(1, amount / HEAVY_HIT);
+        const lost = result.destroyed.filter((id) => id !== "torso");
         if (victim === this.player) {
-          this.damageFlash = 1;
-          this.cameraRig.shake(0.25);
-          this.sfx.hitTaken();
+          this.damageFlash = Math.max(this.damageFlash, 0.45 + 0.55 * strength);
+          this.cameraRig.shake(Math.min(FEEL.hitShakeMax, FEEL.hitShakeBase + amount * FEEL.hitShakePerDamage));
+          this.sfx.hitTaken(strength);
+          for (const id of lost) {
+            this.notify(id === "legs" ? "Legs crippled: movement reduced." : `${id === "armL" ? "Left" : "Right"} arm destroyed: weapon lost.`, 4);
+          }
         }
         if (attacker === this.player) {
           this.hitFlash = 1;
-          this.sfx.hitLanded();
+          this.sfx.hitLanded(strength);
+          for (const id of lost) this.notify(`${victim.name}: ${SECTION_NAMES[id]} destroyed.`, 3);
         }
         this.raiseAlarm(victim);
       },
-      onKill: (victim) => this.onKill(victim),
+      onKill: (victim, attacker) => this.onKill(victim, attacker),
       onFire: (shooter, weapon, at) => {
         const d = shooter === this.player ? 0 : Vector3.Distance(at, this.player.feet);
         this.sfx.shot(weapon.kind, weapon.damage > 30, d);
@@ -283,23 +302,39 @@ export class World {
           armorScale: ENEMY_TUNING.armorScale,
           damageScale: ENEMY_TUNING.damageScale,
         });
-        mech.brain = new AiController(patrol, home, startIndex + 1);
+        mech.brain = new AiController(patrol, home, startIndex + 1, squad.id);
         this.mechs.push(mech);
         this.hud.addMarker(mech.visual.markerNode);
       });
     }
   }
 
-  /** A mech under attack (or one that spots the enemy) alerts nearby allies. */
+  /**
+   * A mech under attack (or one that spots the enemy) alerts its own squad, wherever they are.
+   * Other squads only join once they see the enemy for themselves, so squads can be fought
+   * one at a time.
+   */
   private raiseAlarm(source: MechEntity): void {
+    if (!source.brain) return;
     for (const mech of this.mechs) {
-      if (mech.brain && mech.faction === source.faction && Vector3.Distance(mech.feet, source.feet) < ALERT_RADIUS) {
-        mech.brain.alert();
-      }
+      if (mech.brain && mech.brain.squadId === source.brain.squadId) mech.brain.alert();
     }
   }
 
-  private onKill(victim: MechEntity): void {
+  /** The terrain or structure surface directly below a point (or the point itself if none). */
+  private groundBelow(at: Vector3): Vector3 {
+    const hit = raycastWorld(this.scene, at, new Vector3(at.x, at.y - 400, at.z));
+    return hit ? hit.point : at.clone();
+  }
+
+  private onKill(victim: MechEntity, attacker: MechEntity): void {
+    // Mechs can die in the air; the wreck and its salvage come to rest on the ground below.
+    const ground = this.groundBelow(victim.center);
+    this.wrecks.spawn(ground, victim.state.legsYaw, victim.frame.height);
+    if (attacker === this.player && victim !== this.player) {
+      this.killFlash = 1;
+      this.sfx.kill();
+    }
     if (victim === this.player) {
       this.deaths++;
       this.respawnTimer = RESPAWN_DELAY;
@@ -307,7 +342,8 @@ export class World {
       return;
     }
     this.kills++;
-    this.salvage.spawn(new Vector3(victim.feet.x, victim.feet.y + 1.4, victim.feet.z), rollLoot(victim.loadout, this.rng));
+    // The crate floats just above the wreck.
+    this.salvage.spawn(new Vector3(ground.x, ground.y + 2.6, ground.z), rollLoot(victim.loadout, this.rng));
     const left = this.enemies.length;
     if (left > 0) {
       this.notify(`Hostile destroyed. ${left} remaining.`, 4);
@@ -349,6 +385,32 @@ export class World {
     this.notify(`Salvaged: ${[...names, `${scrap} scrap`].join(", ")}`, 5);
   }
 
+  /** Footfalls and landings: sound for every mech in earshot, dust, and a camera kick for the player. */
+  private groundFeedback(mech: MechEntity): void {
+    const s = mech.state;
+    const isPlayer = mech === this.player;
+    const distance = isPlayer ? 0 : Vector3.Distance(mech.feet, this.player.feet);
+    if (s.landImpact >= FEEL.landMinSpeed) {
+      const strength = Math.min(1, s.landImpact / FEEL.landFullSpeed);
+      this.sfx.land(strength, distance);
+      this.effects.dust(mech.feet, mech.frame.radius * (1.2 + 1.8 * strength));
+      if (isPlayer) this.cameraRig.shake(FEEL.landShake * strength);
+    } else if (s.footstep) {
+      this.sfx.footstep(Math.min(1, mech.horizontalSpeed / mech.frame.sprintSpeed), distance);
+    }
+  }
+
+  /** Warn as the player's heat nears the cap, sound the alarm at lockout, and the all-clear after. */
+  private heatFeedback(): void {
+    const s = this.player.state;
+    const hot = s.heat >= this.player.frame.heatCapacity * FEEL.heatWarnFraction;
+    if (s.overheated && !this.wasOverheated) this.sfx.overheat();
+    else if (!s.overheated && this.wasOverheated) this.sfx.cooled();
+    else if (hot && !this.wasHot && !s.overheated) this.sfx.heatWarning();
+    this.wasHot = hot;
+    this.wasOverheated = s.overheated;
+  }
+
   /** One fixed simulation step. Does nothing unless the game is in play. */
   step(dt: number): void {
     if (this.mode !== "playing") return;
@@ -367,7 +429,9 @@ export class World {
       this.input.yaw = intent.aimYaw;
       this.input.pitch = intent.aimPitch;
       this.player.step(intent, dt);
+      this.groundFeedback(this.player);
       this.combat.stepMech(this.player, intent);
+      this.heatFeedback();
       this.collectSalvage();
       if (this.phase === "return" && this.atBase) this.completeMission();
     } else {
@@ -376,12 +440,20 @@ export class World {
       if (this.respawnTimer <= 0) this.respawnPlayer();
     }
 
+    // Only a few of the pilots in the fight may fire at once; see ENEMY_TUNING.maxAttackers.
+    const fighting = this.mechs.filter((m) => m.brain && m.alive && m.brain.state.mode !== "patrol");
+    this.attackers = pickAttackers(
+      fighting.map((m) => ({ pilot: m, distance: m.brain!.targetDistance, holding: this.attackers.has(m) })),
+      ENEMY_TUNING.maxAttackers,
+    );
+
     for (const mech of this.mechs) {
       if (!mech.brain || !mech.alive) continue;
       const before = mech.brain.state.mode;
-      const intent = mech.brain.think(mech, this.mechs, this.scene, this.tick, dt, this.rng);
+      const intent = mech.brain.think(mech, this.mechs, this.scene, this.tick, dt, this.rng, this.attackers.has(mech));
       if (before === "patrol" && mech.brain.state.mode !== "patrol") this.raiseAlarm(mech);
       mech.step(intent, dt);
+      this.groundFeedback(mech);
       this.combat.stepMech(mech, intent);
     }
 
@@ -442,12 +514,13 @@ export class World {
   render(alpha: number, frameDt: number): void {
     const playing = this.mode === "playing";
     for (const mech of this.mechs) mech.renderUpdate(playing ? alpha : 1, playing ? frameDt : 0);
-    this.cameraRig.update(this.player, this.input.yaw, this.input.pitch);
+    this.cameraRig.update(this.player, this.input.yaw, this.input.pitch, frameDt);
     if (playing) {
       this.effects.update(frameDt);
       this.salvage.update(frameDt);
       this.hitFlash = Math.max(0, this.hitFlash - frameDt * 6);
       this.damageFlash = Math.max(0, this.damageFlash - frameDt * 2.5);
+      this.killFlash = Math.max(0, this.killFlash - frameDt * 1.6);
       const s = this.player.state;
       this.sfx.setThrust(!this.player.alive ? 0 : s.boostTime > 0 ? 1 : s.jetting ? 0.7 : 0);
     }
@@ -471,13 +544,16 @@ export class World {
       sections: this.sectionFractions(),
       target: this.aimedMech ? { name: this.aimedMech.name, health: healthFraction(this.aimedMech.health) } : null,
       objective,
-      message: this.message?.text ?? null,
+      // Without the mouse captured there is no looking around; say how to get it back.
+      message: this.message?.text ?? (this.input.needsPointer ? "Click the view to capture the mouse" : null),
       heading: this.input.yaw,
       waypoint:
         this.phase === "done"
           ? null
           : { bearing: Math.atan2(dx, dz), distance: Math.hypot(dx, dz), label: this.phase === "assault" ? "OUTPOST" : "BASE" },
+      heatWarnAt: FEEL.heatWarnFraction,
       hitFlash: this.hitFlash,
+      killFlash: this.killFlash,
       damageFlash: this.damageFlash,
       info: this.infoText(),
       radar: this.radarBlips(),

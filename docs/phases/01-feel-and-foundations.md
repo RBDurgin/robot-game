@@ -1,6 +1,6 @@
 # Phase 1: Feel and foundations
 
-**Status: not started.** Size: 1 to 2 sessions. Depends on: phase 0.
+**Status: done.** Size: 1 to 2 sessions. Depends on: phase 0.
 
 ## Goal
 
@@ -50,12 +50,49 @@ New frames, weapons, zones or systems. This phase changes numbers and fixes defe
 
 ## Checklist
 
-- [ ] Playtest notes collected
-- [ ] Movement and camera tuned
-- [ ] Weapons and enemy difficulty tuned
-- [ ] Real-browser input and pause confirmed
-- [ ] Audio levels confirmed
-- [ ] Ignores restored, `npm run check` added, first commit made
-- [ ] Frame rate baseline recorded: ______
-- [ ] Small feel wins added
-- [ ] User sign-off
+- [x] Playtest notes collected (first round: difficulty, frame rate)
+- [x] Movement and camera tuned (kept as they are, by the user's choice)
+- [x] Enemy difficulty tuned (weapons unchanged, no notes against them)
+- [x] Real-browser input and pause confirmed
+- [x] Audio levels confirmed
+- [x] Ignores restored, `npm run check` added
+- [x] Phase 1 work committed
+- [x] Frame rate baseline recorded: 60 fps average, 54 to 56 fps in a fight with all five enemies on a 2019 16-inch MacBook Pro, latest Chrome, built-in 60 Hz display. After requesting the discrete GPU: 60 average, 54 to 60 in the same fight, worst frame about 34 fps
+- [x] Small feel wins added (to be judged in the playtest)
+- [x] User sign-off (2026-11-15)
+
+## Progress notes
+
+Decisions (2026-11-15): keep the medium frame's handling as it is; measure the frame rate before choosing a target.
+
+Done so far, verified by `npm run check` and the screenshots, not yet by a real-browser playtest:
+
+- **Repo hygiene.** `dist/`, `test-results/` and `tests/e2e/screenshots/` are ignored and no longer tracked. `npm run check` runs typecheck, unit tests and e2e.
+- **Feel wins.** Footsteps and landing thump (sim events `footstep` and `landImpact` in `src/sim/mech.ts`, the walk animation now reads the same stride so sound and feet agree), landing dust and camera kick, hit marker and kill marker on the crosshair, kill sound, hit sounds and shake scaled by damage, notices when a section is destroyed, wrecks where mechs die (visual only, no collision), heat warning from 80% with a blinking bar, a centre-screen alert and alarm sounds. Tuning is in `src/data/feel.ts`.
+- **Real-browser fixes made from reading the code.** Opening the backquote panel no longer pauses the game (it frees the mouse; click the view to recapture). Resuming within a second of pressing Esc retries the mouse capture, and the HUD says "Click the view to capture the mouse" whenever the game is running without it. Held Space or Tab no longer reaches the page. A limiter on the audio output stops clipping when many sounds overlap.
+- **Render smoothing.** Camera shake now decays by time instead of per frame (it faded 2.4 times faster at 144 Hz), and no longer moves the aim point. Mech positions are interpolated between simulation steps and the view uses the latest mouse angles, which is the right arrangement; whether any jitter remains needs a high-refresh display.
+- **Performance baseline.** The backquote overlay now shows average fps, the 1% low and the worst frame over the last five seconds. Read the baseline from there during a fight.
+
+Playtest round 1 (2026-11-15):
+
+- **Too hard at the start.** Attacking one enemy brought the other four and the player died almost at once. Cause: any hit alerted every enemy within 120 m, alarms chained from mech to mech, and all five then fired together. Changes:
+  - Alarms are per squad. The picket (2) and the garrison (3) are separate fights unless the other squad sees the player itself.
+  - Sight range for unalerted enemies is 120 m, down from 170 m (`DEFAULT_AI.detectRange`).
+  - At most two enemies fire at once (`ENEMY_TUNING.maxAttackers`, rule in `src/sim/ai/squad.ts`). The others hold fire and circle at long range until a slot opens.
+  - Enemy damage (0.4x) and armor (0.7x) are unchanged, so the effect of the above can be judged on its own.
+- **Frame rate.** 60 fps average, 54 to 56 in a five-mech fight. That average looks like a 60 Hz display cap, so the dips are the real signal: there is no headroom, and shadows stay off. Worth finding what costs the frames in a fight before phase 2 adds more mechs.
+
+Playtest round 2 (2026-11-15):
+
+- **Difficulty "a little better".** Taken as still on the hard side: enemy damage lowered from 0.4x to 0.3x (`ENEMY_TUNING.damageScale`). Attack slots stay at two.
+- **Mouse capture, Esc to pause, resume, the new sounds and the heat alert all confirmed working.**
+- **Machine.** 2019 16-inch MacBook Pro (Intel, integrated plus discrete Radeon GPU), latest Chrome; the dev server runs in the VS Code dev container, the game runs in Chrome on the Mac. Chrome gives WebGL the integrated GPU unless the page asks otherwise, so the engine now requests `powerPreference: "high-performance"`. The frame rate needs measuring again after this change.
+
+Playtest round 3 (2026-11-15):
+
+- **Difficulty accepted.** With 0.3x enemy damage, two attack slots and per-squad alarms the user cleared the level.
+- **Frame rate after the GPU change.** 60 average, 54 to 60 in a five-mech fight, worst single frame about 34 fps. Slightly better at the top of the range; occasional hitches remain and their cause is not yet known. The game holds close to 60 on this machine but has no headroom, so shadows stay off and the target is 60 fps.
+
+Signed off on 2026-11-15: handling, camera and weapons stay as they are.
+
+Carried forward: the cause of the occasional frame hitch in a fight (worst about 34 fps) is unknown. Profile it in Chrome on the user's machine before phase 2 adds more mechs.

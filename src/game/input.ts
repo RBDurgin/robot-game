@@ -22,13 +22,16 @@ export class PlayerInput {
   private readonly pressHandlers = new Map<string, () => void>();
   /** Called when the browser releases the mouse (Esc, alt-tab). */
   onPointerReleased: (() => void) | null = null;
+  private quietRelease = false;
+  private retryTimer = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
+      // Also for auto-repeat: a held Space must not scroll or re-press a focused button.
+      if (e.code === "Space" || e.code === "Tab") e.preventDefault();
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressHandlers.get(e.code)?.();
-      if (e.code === "Space" || e.code === "Tab") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     window.addEventListener("blur", () => {
@@ -53,7 +56,9 @@ export class PlayerInput {
     document.addEventListener("pointerlockchange", () => {
       if (!this.pointerLocked) {
         this.buttons.clear();
-        this.onPointerReleased?.();
+        const quiet = this.quietRelease;
+        this.quietRelease = false;
+        if (!quiet) this.onPointerReleased?.();
       }
     });
   }
@@ -67,12 +72,28 @@ export class PlayerInput {
     // Headless Chromium stalls a few seconds after taking pointer lock, so automated
     // test runs (which script input directly) skip mouse capture.
     if (navigator.webdriver) return;
-    // Some browsers return a promise that rejects if the lock is refused; that is not fatal.
-    Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    const request = (): Promise<void> => Promise.resolve(this.canvas.requestPointerLock());
+    // Chromium refuses a new lock for about a second after Esc released the last one, so
+    // resuming quickly from the pause menu can fail. Try once more; if that fails too the
+    // HUD asks for a click (see `needsPointer`), which always works.
+    request().catch(() => {
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = window.setTimeout(() => {
+        if (this.enabled && !this.pointerLocked) request().catch(() => {});
+      }, 1300);
+    });
   }
 
-  releasePointer(): void {
-    if (this.pointerLocked) document.exitPointerLock();
+  /** True when the game is in play but the mouse is not captured, so looking around is dead. */
+  get needsPointer(): boolean {
+    return this.enabled && !this.pointerLocked && !navigator.webdriver;
+  }
+
+  /** Free the mouse. `quiet` skips the released callback (dev panel: free the mouse, keep playing). */
+  releasePointer(quiet = false): void {
+    if (!this.pointerLocked) return;
+    this.quietRelease = quiet;
+    document.exitPointerLock();
   }
 
   /** Register a one-shot action for a key (by KeyboardEvent.code). */

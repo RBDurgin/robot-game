@@ -24,6 +24,12 @@ export interface MechState {
   jetting: boolean;
   /** Movement multiplier, reduced by leg damage (1 = undamaged). */
   mobility: number;
+  /** Ground distance walked so far, metres. A foot plants every `frame.strideLength`. */
+  strideDistance: number;
+  /** True on the step a foot plants. */
+  footstep: boolean;
+  /** Downward speed (m/s) on the step the mech touches down, otherwise 0. */
+  landImpact: number;
 }
 
 export function createMechState(frame: FrameDef, yaw = 0): MechState {
@@ -43,6 +49,9 @@ export function createMechState(frame: FrameDef, yaw = 0): MechState {
     grounded: true,
     jetting: false,
     mobility: 1,
+    strideDistance: 0,
+    footstep: false,
+    landImpact: 0,
   };
 }
 
@@ -56,7 +65,18 @@ function spendEnergy(s: MechState, frame: FrameDef, amount: number): void {
  * the physics layer then moves the body and feeds the resulting velocity back in.
  */
 export function stepMech(s: MechState, frame: FrameDef, intent: Intent, grounded: boolean, dt: number): void {
+  // Touchdown: `s.vel.y` still holds the fall speed the physics layer reported last step.
+  s.landImpact = grounded && !s.grounded ? Math.max(0, -s.vel.y) : 0;
   s.grounded = grounded;
+
+  // Walk cycle. Feet plant half a stride out of phase with the stride boundaries, which is
+  // where the leg animation puts a foot down. A boost dash slides on thrusters: no steps.
+  s.footstep = false;
+  if (grounded && s.boostTime <= 0) {
+    const before = s.strideDistance;
+    s.strideDistance += Math.hypot(s.vel.x, s.vel.z) * dt;
+    s.footstep = Math.floor(s.strideDistance / frame.strideLength + 0.5) !== Math.floor(before / frame.strideLength + 0.5);
+  }
 
   // Torso tracks the aim direction.
   s.torsoYaw = approachAngle(s.torsoYaw, intent.aimYaw, frame.torsoTurnRate * dt);

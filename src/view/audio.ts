@@ -19,7 +19,14 @@ export class Sfx {
       this.ctx = ctx;
       this.master = ctx.createGain();
       this.master.gain.value = this.volume;
-      this.master.connect(ctx.destination);
+      // A limiter on the output: a squad firing at once plus an explosion must not clip.
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -10;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.15;
+      this.master.connect(limiter).connect(ctx.destination);
 
       const buffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -71,9 +78,9 @@ export class Sfx {
     src.start(t, Math.random() * 0.5, opts.duration);
   }
 
-  private tone(freqFrom: number, freqTo: number, duration: number, gainValue: number, type: OscillatorType = "square"): void {
+  private tone(freqFrom: number, freqTo: number, duration: number, gainValue: number, type: OscillatorType = "square", delay = 0): void {
     if (!this.ctx || !this.master || gainValue < 0.004) return;
-    const t = this.ctx.currentTime;
+    const t = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
     osc.type = type;
     osc.frequency.setValueAtTime(freqFrom, t);
@@ -106,12 +113,50 @@ export class Sfx {
     this.tone(90, 30, 0.6, 0.5 * k, "sine");
   }
 
-  hitTaken(): void {
-    this.burst({ duration: 0.12, gain: 0.35, filter: 1400, type: "bandpass" });
+  /** `strength` 0..1: a rifle round is a tick, a shell is a clang. */
+  hitTaken(strength: number): void {
+    this.burst({ duration: 0.1 + 0.12 * strength, gain: 0.25 + 0.35 * strength, filter: 1400, type: "bandpass" });
+    if (strength > 0.4) this.tone(140, 60, 0.18, 0.3 * strength, "sine");
   }
 
-  hitLanded(): void {
-    this.tone(1400, 1100, 0.05, 0.08, "sine");
+  /** Hit confirmation; `strength` 0..1 by damage dealt. */
+  hitLanded(strength: number): void {
+    this.tone(1400, 1100, 0.05, 0.08 + 0.1 * strength, "sine");
+  }
+
+  /** Kill confirmation: two rising notes, distinct from an ordinary hit. */
+  kill(): void {
+    this.tone(660, 700, 0.09, 0.16, "triangle");
+    this.tone(990, 1050, 0.16, 0.16, "triangle", 0.09);
+  }
+
+  /** One foot planting. `weight` 0..1 grows with speed. */
+  footstep(weight: number, distance: number): void {
+    const k = Sfx.falloff(distance) * (0.55 + 0.45 * weight);
+    this.burst({ duration: 0.11, gain: 0.3 * k, filter: 260 });
+    this.tone(70, 42, 0.09, 0.22 * k, "sine");
+  }
+
+  /** Touchdown after a jump or fall. `strength` 0..1 by impact speed. */
+  land(strength: number, distance: number): void {
+    const k = Sfx.falloff(distance) * (0.4 + 0.6 * strength);
+    this.burst({ duration: 0.3 + 0.25 * strength, gain: 0.7 * k, filter: 320 });
+    this.tone(85, 32, 0.28 + 0.2 * strength, 0.6 * k, "sine");
+  }
+
+  /** Heat is close to the cap: a single warning pip. */
+  heatWarning(): void {
+    this.tone(880, 880, 0.08, 0.1, "square");
+  }
+
+  /** Weapons locked out: a three-note falling alarm. */
+  overheat(): void {
+    for (let i = 0; i < 3; i++) this.tone(740 - i * 110, 700 - i * 110, 0.13, 0.16, "square", i * 0.16);
+  }
+
+  /** Weapons back online after an overheat. */
+  cooled(): void {
+    this.tone(520, 780, 0.12, 0.1, "triangle");
   }
 
   pickup(): void {

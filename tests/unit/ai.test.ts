@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SIM_DT } from "../../src/sim/clock";
 import { createAiState, DEFAULT_AI, thinkAi, type AiView } from "../../src/sim/ai/brain";
+import { pickAttackers } from "../../src/sim/ai/squad";
 import { makeRng } from "../../src/sim/math";
 
 const baseView = (over: Partial<AiView> = {}): AiView => ({
@@ -11,6 +12,7 @@ const baseView = (over: Partial<AiView> = {}): AiView => ({
   heatFrac: 0,
   energyFrac: 1,
   target: null,
+  weaponsFree: true,
   blockedAhead: false,
   patrol: [
     { x: 0, y: 0, z: 50 },
@@ -120,5 +122,33 @@ describe("thinkAi", () => {
     run(ai, baseView({ target: null }), 0.1);
     expect(ai.mode).toBe("patrol");
     expect(ai.alerted).toBe(false);
+  });
+});
+
+describe("attack slots", () => {
+  it("a pilot without a slot holds fire and backs off to the edge of the fighting band", () => {
+    const ai = createAiState();
+    ai.alerted = true;
+    const rng = makeRng(3);
+    const view = baseView({ target: target(70), weaponsFree: false });
+    let fired = false;
+    let intent = thinkAi(ai, view, DEFAULT_AI, SIM_DT, rng, 0);
+    for (let i = 0; i < 600; i++) {
+      intent = thinkAi(ai, view, DEFAULT_AI, SIM_DT, rng, intent.aimYaw);
+      fired ||= intent.firePrimary || intent.fireSecondary || intent.melee;
+    }
+    expect(ai.mode).toBe("engage");
+    expect(fired).toBe(false);
+    expect(intent.moveZ).toBe(-1); // 70 m is inside maxRange: retreat to the rim
+  });
+
+  it("gives slots to the closest pilots and keeps a holder unless clearly out-ranged", () => {
+    const c = (pilot: string, distance: number, holding = false) => ({ pilot, distance, holding });
+    expect([...pickAttackers([c("a", 90), c("b", 40), c("c", 60)], 2)].sort()).toEqual(["b", "c"]);
+    // "a" holds a slot and is only 10 m farther than "c": it keeps it.
+    expect([...pickAttackers([c("a", 70, true), c("b", 40, true), c("c", 60)], 2)].sort()).toEqual(["a", "b"]);
+    // 30 m farther is too much: the slot moves.
+    expect([...pickAttackers([c("a", 90, true), c("b", 40, true), c("c", 60)], 2)].sort()).toEqual(["b", "c"]);
+    expect(pickAttackers([c("a", 10)], 0).size).toBe(0);
   });
 });

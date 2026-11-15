@@ -15,9 +15,14 @@ export interface SquadDef {
 /** Tuning for how dangerous enemy pilots are compared with the player. */
 export const ENEMY_TUNING = {
   /** Multiplier on damage dealt by enemies. */
-  damageScale: 0.4,
+  damageScale: 0.3,
   /** Multiplier on enemy armor. */
   armorScale: 0.7,
+  /**
+   * How many enemies may fire on the player at once. The rest of an engaged group holds fire
+   * and circles at long range until a slot opens. This is the main difficulty lever.
+   */
+  maxAttackers: 2,
 };
 
 export const SLICE_SQUADS: SquadDef[] = [

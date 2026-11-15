@@ -31,6 +31,8 @@ export interface FrameDef {
   legTurnRate: number;
   torsoTurnRate: number;
   maxPitch: number;
+  /** Ground covered per footstep, metres. Drives the walk cycle and footfall sounds. */
+  strideLength: number;
 
   boostSpeed: number;
   boostDuration: number;
@@ -72,6 +74,7 @@ export const FRAMES = {
     legTurnRate: 5,
     torsoTurnRate: 6,
     maxPitch: 1.1,
+    strideLength: 2.75,
 
     boostSpeed: 34,
     boostDuration: 0.3,

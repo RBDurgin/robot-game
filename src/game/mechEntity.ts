@@ -58,6 +58,7 @@ export class MechEntity {
   readonly feet = new Vector3();
   private readonly prevFeet = new Vector3();
   private readonly renderFeet = new Vector3();
+  private prevStride = 0;
   private readonly controller: PhysicsCharacterController;
   private readonly scratch = new Vector3();
 
@@ -159,6 +160,7 @@ export class MechEntity {
       if (w) w.cooldown = Math.max(0, w.cooldown - dt);
     }
 
+    this.prevStride = s.strideDistance;
     const support = this.controller.checkSupport(dt, DOWN);
     const grounded = support.supportedState === CharacterSupportedState.SUPPORTED;
 
@@ -194,6 +196,8 @@ export class MechEntity {
     this.visual.update(
       {
         position: this.renderFeet,
+        // Two footsteps make one full leg cycle.
+        walkPhase: ((this.prevStride + (s.strideDistance - this.prevStride) * alpha) / this.frame.strideLength) * Math.PI,
         legsYaw: s.legsYaw,
         torsoYaw: s.torsoYaw,
         torsoPitch: s.torsoPitch,

@@ -96,3 +96,49 @@ describe("stepMech", () => {
     expect(Math.abs(s.torsoYaw)).toBeCloseTo(frame.torsoTurnRate * SIM_DT, 5);
   });
 });
+
+describe("ground feedback events", () => {
+  it("plants a foot once per stride length walked", () => {
+    const s = createMechState(frame);
+    let steps = 0;
+    for (let i = 0; i < 600; i++) {
+      stepMech(s, frame, { ...idleIntent(), moveZ: 1 }, true, SIM_DT);
+      if (s.footstep) steps++;
+    }
+    const expected = s.strideDistance / frame.strideLength;
+    expect(s.strideDistance).toBeGreaterThan(frame.walkSpeed * 9);
+    expect(Math.abs(steps - expected)).toBeLessThanOrEqual(1);
+  });
+
+  it("takes no steps while standing, airborne or boosting", () => {
+    const s = createMechState(frame);
+    const count = (intent: ReturnType<typeof idleIntent>, grounded: boolean, n: number) => {
+      let steps = 0;
+      for (let i = 0; i < n; i++) {
+        stepMech(s, frame, intent, grounded, SIM_DT);
+        if (s.footstep) steps++;
+      }
+      return steps;
+    };
+    expect(count(idleIntent(), true, 120)).toBe(0);
+    s.vel.z = frame.walkSpeed;
+    expect(count({ ...idleIntent(), moveZ: 1 }, false, 120)).toBe(0);
+    const boostSteps = Math.floor(frame.boostDuration / SIM_DT) - 1;
+    s.vel.x = s.vel.y = s.vel.z = 0;
+    stepMech(s, frame, idleIntent(), true, SIM_DT);
+    expect(count({ ...idleIntent(), moveZ: 1, boost: true }, true, boostSteps)).toBe(0);
+    expect(s.boostTime).toBeGreaterThan(0);
+  });
+
+  it("reports the fall speed on the step it lands, and only then", () => {
+    const s = createMechState(frame);
+    run(s, idleIntent(), false, 30);
+    const fallSpeed = -s.vel.y;
+    expect(fallSpeed).toBeGreaterThan(5);
+    expect(s.landImpact).toBe(0);
+    stepMech(s, frame, idleIntent(), true, SIM_DT);
+    expect(s.landImpact).toBeCloseTo(fallSpeed, 5);
+    stepMech(s, frame, idleIntent(), true, SIM_DT);
+    expect(s.landImpact).toBe(0);
+  });
+});

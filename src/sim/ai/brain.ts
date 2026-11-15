@@ -19,7 +19,7 @@ export interface AiConfig {
 }
 
 export const DEFAULT_AI: AiConfig = {
-  detectRange: 170,
+  detectRange: 120,
   loseRange: 280,
   minRange: 45,
   maxRange: 110,
@@ -82,6 +82,8 @@ export interface AiView {
   energyFrac: number;
   /** Nearest hostile, or null if none is alive. */
   target: { center: Vec3; vel: Vec3; visible: boolean } | null;
+  /** False while other pilots hold the attack slots: hold fire and hang back. */
+  weaponsFree: boolean;
   /** True if static geometry is close in front of the legs. */
   blockedAhead: boolean;
   patrol: Vec3[];
@@ -189,7 +191,10 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       intent.moveX = move.moveX;
       intent.moveZ = move.moveZ;
     } else {
-      const radial = !target.visible || targetDist > cfg.maxRange ? 1 : targetDist < cfg.minRange ? -1 : 0;
+      // Pilots waiting for an attack slot circle at the outer edge of the fighting band.
+      const near = view.weaponsFree ? cfg.minRange : cfg.maxRange;
+      const far = view.weaponsFree ? cfg.maxRange : cfg.maxRange * 1.3;
+      const radial = !target.visible || targetDist > far ? 1 : targetDist < near ? -1 : 0;
       intent.moveZ = radial;
       intent.moveX = target.visible ? ai.strafeDir * 0.8 : 0;
       intent.sprint = radial === 1 && targetDist > cfg.maxRange * 1.5;
@@ -202,13 +207,13 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       ai.firing = !ai.firing;
       ai.burstTimer = ai.firing ? 0.9 + rng() * 0.9 : 0.6 + rng() * 0.8;
     }
-    if (target.visible) {
+    if (target.visible && view.weaponsFree) {
       intent.firePrimary = ai.firing && view.heatFrac < 0.85;
       intent.fireSecondary = targetDist > 25 && view.heatFrac < 0.6;
       intent.melee = targetDist < 6;
-      // Occasional evasive dash.
-      intent.boost = view.energyFrac > 0.5 && rng() < dt * 0.25;
     }
+    // Occasional evasive dash.
+    if (target.visible) intent.boost = view.energyFrac > 0.5 && rng() < dt * 0.25;
   }
 
   intent.jump = ai.jumpTimer > 0;

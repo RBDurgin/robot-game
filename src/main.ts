@@ -1,5 +1,6 @@
 import { Engine } from "@babylonjs/core";
 import { FixedStepClock, SIM_DT } from "./sim/clock";
+import { FrameStats } from "./game/frameStats";
 import { World } from "./game/world";
 import { buildTweakPanel } from "./view/tweakPanel";
 
@@ -20,16 +21,23 @@ async function boot(): Promise<void> {
   const canvas = document.getElementById("game") as HTMLCanvasElement;
   const debugEl = document.getElementById("debug") as HTMLDivElement;
 
-  const engine = new Engine(canvas, true, { stencil: true });
+  const engine = new Engine(canvas, true, {
+    stencil: true,
+    // Laptops with two GPUs give a web page the integrated one unless it asks for the fast one.
+    powerPreference: "high-performance",
+  });
   const overlay = document.getElementById("overlay") as HTMLDivElement;
   const world = await World.create(engine, canvas, overlay);
   const clock = new FixedStepClock();
+
+  const stats = new FrameStats();
 
   const debug: GameDebug = { ready: true, tick: 0, world };
   window.__game = debug;
 
   engine.runRenderLoop(() => {
     const frameDt = engine.getDeltaTime() / 1000;
+    stats.add(frameDt);
     const steps = clock.advance(frameDt);
     for (let i = 0; i < steps; i++) world.step(SIM_DT);
     debug.tick = world.tick;
@@ -38,7 +46,7 @@ async function boot(): Promise<void> {
     const p = world.player.feet;
     const s = world.player.state;
     debugEl.textContent =
-      `fps   ${engine.getFps().toFixed(0)}\n` +
+      `fps   ${stats.summary()}\n` +
       `pos   ${p.x.toFixed(0)} ${p.y.toFixed(1)} ${p.z.toFixed(0)}\n` +
       `speed ${world.player.horizontalSpeed.toFixed(1)} m/s ${s.grounded ? "ground" : "air"}\n` +
       `view  ${world.cameraRig.mode}`;
@@ -53,7 +61,9 @@ async function boot(): Promise<void> {
     if (e.code !== "Backquote") return;
     debugEl.hidden = !debugEl.hidden;
     tweaksEl.hidden = debugEl.hidden;
-    if (!tweaksEl.hidden) world.input.releasePointer();
+    // Free the mouse for the sliders without pausing, so values can be felt while playing.
+    // Click the view to capture the mouse again.
+    if (!tweaksEl.hidden) world.input.releasePointer(true);
   });
 }
 
