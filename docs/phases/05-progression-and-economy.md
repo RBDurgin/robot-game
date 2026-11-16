@@ -1,6 +1,6 @@
 # Phase 5: Progression and economy
 
-**Status: built, awaiting playtest.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
+**Status: done.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
 
 ## Goal
 
@@ -108,4 +108,4 @@ Story rewards (phase 6). Balance for a full-length game; aim for a curve that ho
 - [x] Versioned saves with migrations
 - [x] Save slots, IndexedDB, export and import
 - [x] Difficulty by region
-- [ ] User playtest and sign-off
+- [x] User playtest and sign-off
