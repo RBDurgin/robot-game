@@ -63,8 +63,6 @@ export interface SavedPosition {
   yaw: number;
 }
 
-const KEY = "robot-game-save-v1";
-
 export const DEFAULT_SETTINGS: Settings = { sensitivity: 0.0022, volume: 0.6, defaultView: "third" };
 
 export function freshSave(): SaveData {
@@ -208,23 +206,4 @@ export function parseSave(raw: unknown): SaveData {
   save.standing = parseStanding(data.standing);
   save.war = data.war && typeof data.war === "object" ? (data.war as WarState) : null;
   return save;
-}
-
-/** Load the saved game, falling back to a fresh one if storage is unavailable or the data is bad. */
-export function loadSave(): SaveData {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return parseSave(JSON.parse(raw));
-  } catch {
-    // Private windows and blocked storage land here; play on with defaults.
-  }
-  return freshSave();
-}
-
-export function writeSave(save: SaveData): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(save));
-  } catch {
-    // Not being able to save is not fatal.
-  }
 }

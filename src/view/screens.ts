@@ -2,6 +2,7 @@ import { FRAME_IDS, FRAMES, type FrameDef, type FrameId, type Trigger } from "..
 import { MODS } from "../data/mods";
 import type { WeaponDef } from "../data/weapons";
 import type { Settings } from "../game/save";
+import type { SlotInfo } from "../game/saveStore";
 import type { WorldModel } from "../sim/terrain";
 import { drawMap, type MapSite, type MapTerritory } from "./mapView";
 import { buyItem, buyPrice, isSpare, repairBill, sellItem, sellPrice, type Wallet } from "../sim/economy";
@@ -49,6 +50,15 @@ export interface PauseOptions {
   settings: Settings;
   onSettings(settings: Settings): void;
   onResume(): void;
+  /** The save slots, for the list on this screen. */
+  slots(): Promise<SlotInfo[]>;
+  /** Leave this game and load another slot. */
+  onSlot(slot: number): void;
+  /** Download the game in progress as a file. */
+  onExport(): void;
+  /** Replace the slot in use with the contents of a save file. Resolves to what went wrong, or null. */
+  onImport(text: string): Promise<string | null>;
+  /** Empty the slot in use and start again. */
   onReset(): void;
 }
 
@@ -185,6 +195,41 @@ export class Screens {
     const controls = el("dl", "controls");
     for (const [key, action] of CONTROLS) controls.append(el("dt", "", [key]), el("dd", "", [action]));
 
+    // The slots are read from storage, so the list fills in a moment after the screen opens.
+    const slotList = el("ul", "slots");
+    const saveNote = el("p", "dim", ["Progress saves by itself to the slot in use."]);
+    void opts.slots().then((slots) => {
+      slotList.replaceChildren(
+        ...slots.map((s) => {
+          const about = s.summary
+            ? `${s.summary.frame} frame · ${s.summary.scrap} scrap · ${s.summary.parts} parts · ${s.summary.sites} sites cleared · ${new Date(s.summary.savedAt).toLocaleString()}`
+            : "Empty";
+          const use = button(s.summary ? "Load" : "New game", () => opts.onSlot(s.slot), "secondary");
+          use.setAttribute("aria-label", `${s.summary ? "Load" : "New game in"} slot ${s.slot}`);
+          return el("li", s.active ? "active" : "", [el("span", "", [`Slot ${s.slot}${s.active ? " (in use)" : ""}: ${about}`]), ...(s.active ? [] : [use])]);
+        }),
+      );
+    });
+    const file = el("input");
+    file.type = "file";
+    file.accept = "application/json,.json";
+    file.hidden = true;
+    file.setAttribute("aria-label", "Save file to import");
+    file.addEventListener("change", () => {
+      const chosen = file.files?.[0];
+      if (!chosen) return;
+      void chosen
+        .text()
+        .then((text) => opts.onImport(text))
+        .then((problem) => {
+          if (problem) {
+            saveNote.textContent = problem;
+            saveNote.className = "bad";
+          }
+          file.value = "";
+        });
+    });
+
     const panel = el("div", "panel", [
       el("h1", "", [opts.isStart ? "Ashfall Basin" : "Paused"]),
       ...(opts.isStart
@@ -200,10 +245,16 @@ export class Screens {
       range("Mouse sensitivity", 0.0006, 0.005, 0.0002, settings.sensitivity, (v) => (settings.sensitivity = v)),
       range("Volume", 0, 1, 0.05, settings.volume, (v) => (settings.volume = v)),
       el("label", "row", [el("span", "", ["Starting view"]), view]),
+      el("h2", "", ["Saved games"]),
+      slotList,
+      saveNote,
       el("div", "actions", [
-        button(opts.isStart ? "Deploy" : "Resume", opts.onResume),
-        button("Reset saved progress", opts.onReset, "secondary"),
+        button("Export save", opts.onExport, "secondary"),
+        button("Import save", () => file.click(), "secondary"),
+        button("Reset this slot", opts.onReset, "secondary"),
+        file,
       ]),
+      el("div", "actions", [button(opts.isStart ? "Deploy" : "Resume", opts.onResume)]),
     ]);
     this.show(panel);
   }

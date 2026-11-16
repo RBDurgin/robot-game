@@ -29,7 +29,7 @@ Three layers with a strict dependency direction: `sim` knows nothing about Babyl
   reputation).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
 - `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
-  camera, save).
+  camera, save and save slots).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
 - `src/data/`: everything tunable (frames, weapons, plating, tiers and modifiers, factions and their rosters, garrisons,
   war pace and reputation, loot, prices and repair costs, the world with its regions and sites, biomes, site layouts,
@@ -115,6 +115,10 @@ Key seams:
 - The player's parts are items with their own numbers. Read a weapon's stats from the mounted
   weapon's `def` (or `fitKit`), not from `WEAPONS[id]`, which is only the plain Mk I part.
   `mech.loadout` still names part ids, for looks and for what a wreck drops.
+- Saves live in IndexedDB, one per slot (`SaveStore` in `src/game/saveStore.ts`); writes are
+  queued, not immediate. Anything that reloads the page goes through `World.reload`, which waits
+  for them. E2E tests may still seed `localStorage["robot-game-save-v1"]`: with every slot empty
+  it is taken as the old single save and moved into slot 1.
 - When the save format changes, bump `SAVE_VERSION` and add a step to `MIGRATIONS`; do not edit an
   old step.
 - Saves written before phase 2 have `armL`/`armR` in the loadout and no frame, and saves from

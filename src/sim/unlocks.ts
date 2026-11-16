@@ -32,7 +32,7 @@ export function mountUnlocked(unlocks: UnlockId[], mount: "arm" | "shoulder"): b
 export function unlockNeeds(id: UnlockId, progress: Progress): string[] {
   const u = def(id);
   const needs: string[] = [];
-  if (u.after && isUnlockId(u.after) && !progress.unlocks.includes(u.after)) needs.push(`Needs the ${def(u.after).name.toLowerCase()}`);
+  if (u.after && isUnlockId(u.after) && !progress.unlocks.includes(u.after)) needs.push(`Needs the ${def(u.after).name}`);
   if (u.cleared && progress.cleared.length < u.cleared) needs.push(`Clear ${u.cleared} sites (${progress.cleared.length} so far)`);
   const best = Math.max(...WAR_FACTION_IDS.map((f) => progress.standing[f]));
   if (u.standing !== undefined && best < u.standing) needs.push(`Reach +${u.standing} standing with a faction (best so far ${best > 0 ? "+" : ""}${Math.round(best)})`);

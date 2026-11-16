@@ -1,6 +1,6 @@
 # Phase 5: Progression and economy
 
-**Status: in progress.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
+**Status: built, awaiting playtest.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
 
 ## Goal
 
@@ -58,9 +58,15 @@ Scrap is collected in the slice but buys nothing. Once there are several frames 
 - Step 6. Every region has a `danger` of 1 to 3 (`src/data/world.ts`). Pilots take their strength
   from the region their site is in (`DANGER` in `src/data/encounters.ts`: up to +45% armor and
   +50% damage), not from the player. The HUD and map name the threat on entering a region.
+- Step 5, second half. Three save slots, kept in IndexedDB (`src/game/saveStore.ts`), with
+  `localStorage` as the fallback where IndexedDB is refused. The save from before slots moves
+  into slot 1 the first time the game loads. The pause screen lists the slots and can export the
+  game in progress to a file, import one into the slot in use, and reset that slot.
 
 ## For the playtest
 
+- Your existing save should turn up in slot 1 with its scrap and parts, on the frame you last
+  used. Worth a look before anything else.
 - Whether a lost suit (74 scrap on the medium frame, about three kills) stings the right amount.
 - Whether a Mk II or a modified part is noticeable in a fight, and worth swapping for.
 - Whether the high-threat corners are a real step up, and whether their salvage is worth the trip.
@@ -100,6 +106,6 @@ Story rewards (phase 6). Balance for a full-length game; aim for a curve that ho
 - [x] Loot tables by faction and region
 - [x] Frame and hardpoint unlocks
 - [x] Versioned saves with migrations
-- [ ] Save slots, IndexedDB, export and import
+- [x] Save slots, IndexedDB, export and import
 - [x] Difficulty by region
 - [ ] User playtest and sign-off

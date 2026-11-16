@@ -41,7 +41,8 @@ import { MechEntity } from "./mechEntity";
 import { perfEnd, perfMark, perfStart } from "./perf";
 import { enablePhysics, raycastWorld, stepPhysics } from "./physics";
 import { SalvageField } from "./salvage";
-import { loadSave, writeSave, type SaveData, type Settings } from "./save";
+import type { SaveData, Settings } from "./save";
+import { openSaveStore, readSaveFile, writeSaveFile, type SaveStore } from "./saveStore";
 import { TerrainStreamer } from "./terrainStream";
 
 const RESPAWN_DELAY = 3.5;
@@ -136,6 +137,7 @@ export class World {
     readonly screens: Screens,
     player: MechEntity,
     save: SaveData,
+    private readonly store: SaveStore,
   ) {
     this.save = save;
     this.player = player;
@@ -252,7 +254,8 @@ export class World {
     const sun = new DirectionalLight("sun", new Vector3(-0.45, -1, 0.35), scene);
     sun.intensity = 0.95;
 
-    const save = loadSave();
+    const store = await openSaveStore();
+    const save = await store.load();
     // `?arsenal` in the URL stocks the hangar with two of every weapon and plating, for playtests.
     if (new URLSearchParams(location.search).has("arsenal")) {
       save.unlocks = [...UNLOCK_IDS];
@@ -280,7 +283,7 @@ export class World {
     input.yaw = spawnYaw;
     input.pitch = -0.1;
 
-    const world = new World(scene, model, new TerrainStreamer(scene, model), input, new CameraRig(scene), new Hud(scene), new Screens(overlay), player, save);
+    const world = new World(scene, model, new TerrainStreamer(scene, model), input, new CameraRig(scene), new Hud(scene), new Screens(overlay), player, save, store);
     // Everything around the start point is built before the first frame; after that the
     // world streams in a little per frame as the player moves.
     world.terrain.loadAll(start.x, start.z);
@@ -480,7 +483,7 @@ export class World {
     const events = stepWar(this.war, this.warMap, this.warContext);
     for (const event of events) this.onWarEvent(event);
     this.watchRaids();
-    if (events.length > 0) writeSave(this.save);
+    if (events.length > 0) this.store.write(this.save);
   }
 
   /** Rebuild a site's sleeping garrison from the war, unless the player is there to see it. */
@@ -576,7 +579,7 @@ export class World {
         this.syncSite(result.site, true);
         this.reportBattle(result);
       }
-      writeSave(this.save);
+      this.store.write(this.save);
     }
   }
 
@@ -616,18 +619,41 @@ export class World {
       settings: this.save.settings,
       onSettings: (s) => {
         this.applySettings(s);
-        writeSave(this.save);
+        this.store.write(this.save);
       },
       onResume: () => this.resume(),
-      onReset: () => {
+      slots: () => this.store.list(),
+      onSlot: (slot) => {
+        this.store.select(slot);
+        this.reload();
+      },
+      onExport: () => {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(new Blob([writeSaveFile(this.save)], { type: "application/json" }));
+        link.download = `robot-game-slot-${this.store.slot}.json`;
+        link.click();
+        // Not at once: the browser is still reading it.
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      },
+      onImport: async (text) => {
         try {
-          localStorage.clear();
-        } catch {
-          // Nothing stored, nothing to clear.
+          this.store.write(readSaveFile(text));
+        } catch (e) {
+          return e instanceof Error ? e.message : "That file could not be read.";
         }
-        location.reload();
+        this.reload();
+        return null;
+      },
+      onReset: () => {
+        this.store.clear();
+        this.reload();
       },
     });
+  }
+
+  /** Start the page again once everything written so far is stored. Nothing is saved after this. */
+  private reload(): void {
+    void this.store.close().then(() => location.reload());
   }
 
   /** Close any menu and play. Call from a click or key press so the mouse can be captured. */
@@ -656,7 +682,7 @@ export class World {
       repairCost: repairCost(this.player.health),
       onTrade: () => {
         this.sfx.ui();
-        writeSave(this.save);
+        this.store.write(this.save);
       },
       onDeploy: (frame, fit) => this.deploy(frame, fit),
     });
@@ -675,7 +701,7 @@ export class World {
     const bill = this.chargeRepair();
     this.save.frame = frame;
     this.save.fit = fit;
-    writeSave(this.save);
+    this.store.write(this.save);
     if (changed) {
       this.rebuildPlayer(frame);
     } else {
@@ -723,8 +749,8 @@ export class World {
         this.war.sites[post] = { owner: this.warMap.byId.get(post)!.startOwner, troops: this.warMap.byId.get(post)!.capacity };
         this.war.raids = this.war.raids.filter((r) => r.to !== post && r.from !== post);
         this.save.position = null;
-        writeSave(this.save);
-        location.reload();
+        this.store.write(this.save);
+        this.reload();
       },
       () => this.resume(),
     );
@@ -802,7 +828,7 @@ export class World {
   private savePosition(): void {
     if (!this.started || !this.player.alive) return;
     this.save.position = { x: Math.round(this.player.feet.x), z: Math.round(this.player.feet.z), yaw: Math.round(this.input.yaw * 100) / 100 };
-    writeSave(this.save);
+    this.store.write(this.save);
   }
 
   // --- The world around the player ---
@@ -830,7 +856,7 @@ export class World {
       if (Math.hypot(p.x - site.x, p.z - site.z) > site.radius + STREAM.discoverMargin) continue;
       if (!this.save.discovered.includes(site.id)) {
         this.save.discovered.push(site.id);
-        writeSave(this.save);
+        this.store.write(this.save);
         perfMark("discover");
         if (site.id !== this.model.def.homeBase) this.notify(`Discovered: ${site.name}`, 4);
       }
@@ -842,7 +868,7 @@ export class World {
     if (this.ownerOf(site.id) !== "player") clearSite(this.war, this.warMap, site.id, true);
     if (site.held || this.save.held.includes(site.id)) return;
     this.save.held.push(site.id);
-    writeSave(this.save);
+    this.store.write(this.save);
     this.notify(`${site.name} secured: hangar and fast travel available.`, 6);
   }
 
@@ -1001,7 +1027,7 @@ export class World {
     }
     const now = clearSite(this.war, this.warMap, site.id, byPlayer);
     if (!byPlayer) {
-      writeSave(this.save);
+      this.store.write(this.save);
       return;
     }
     this.changeStanding(() => recordCapture(this.save.standing, owner));
@@ -1016,7 +1042,7 @@ export class World {
     } else {
       this.notify(`${site.name} cleared. It stands empty for whoever comes next.`, 5);
     }
-    writeSave(this.save);
+    this.store.write(this.save);
   }
 
   /** The danger of the region a pilot's site is in. */
@@ -1035,7 +1061,7 @@ export class World {
     const bill = this.chargeRepair();
     this.player.restore();
     this.movePlayer(base.x, base.z, base.id === this.model.def.homeBase ? World.homeYaw(this.model) : 0);
-    writeSave(this.save);
+    this.store.write(this.save);
     this.notify(`Suit restored at ${base.name}.${bill > 0 ? ` Repairs cost ${bill} scrap.` : ""}`, 5);
   }
 
@@ -1055,7 +1081,7 @@ export class World {
       }
     }
     this.save.scrap += scrap;
-    writeSave(this.save);
+    this.store.write(this.save);
     this.sfx.pickup();
     this.notify(`Salvaged: ${[...names, `${scrap} scrap`].join(", ")}`, 5);
   }
