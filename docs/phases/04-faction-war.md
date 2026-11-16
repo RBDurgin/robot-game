@@ -1,6 +1,6 @@
 # Phase 4: Living faction war
 
-**Status: built, awaiting playtest.** Size: 3 to 4 sessions. Depends on: phase 3.
+**Status: done.** Size: 3 to 4 sessions. Depends on: phase 3.
 
 ## Goal
 
@@ -81,7 +81,7 @@ Authored story beats (phase 6). Economy effects of territory (phase 5).
 - [x] Capturable sites and counterattacks
 - [x] Allied squads
 - [x] Map overlay
-- [ ] User playtest and sign-off
+- [x] User playtest and sign-off
 
 ## For the playtest
 
