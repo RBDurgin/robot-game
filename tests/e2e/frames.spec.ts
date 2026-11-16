@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { approachOutpost, boot, SHOTS, startGame, waitTicks } from "./helpers";
+import { approachOutpost, boot, fitPart, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("frames: three silhouettes, switch frame in the hangar, abilities and shoulder weapons work", async ({ page }) => {
   // ?arsenal stocks the hangar with every weapon.
@@ -50,14 +50,14 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   const shoulderOptions = await page.getByLabel("Right shoulder").locator("option").allTextContents();
   expect(shoulderOptions.some((o) => o.includes("Seeker Rack"))).toBe(true);
   expect(shoulderOptions.some((o) => o.includes("Pulse Rifle"))).toBe(false);
-  await page.getByLabel("Right shoulder").selectOption("seekerRack");
-  await page.getByLabel("Left shoulder").selectOption("seekerRack");
-  await page.getByLabel("Right arm").selectOption("lanceBeam");
-  await page.getByLabel("Left arm").selectOption("scatterGun");
+  await fitPart(page, "Right shoulder", "seekerRack");
+  await fitPart(page, "Left shoulder", "seekerRack");
+  await fitPart(page, "Right arm", "lanceBeam");
+  await fitPart(page, "Left arm", "scatterGun");
   // Bulwark plating on top of all that is half a tonne too much, even for this frame.
-  await page.locator("select").and(page.getByLabel("Plating")).selectOption("heavyPlating");
+  await fitPart(page, "Plating", "heavyPlating");
   await expect(page.getByText(/Over capacity by 0.5 t/)).toBeVisible();
-  await page.locator("select").and(page.getByLabel("Plating")).selectOption("standardPlating");
+  await fitPart(page, "Plating", "standardPlating");
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeEnabled();
   await page.screenshot({ path: `${SHOTS}/12-hangar-heavy.png` });
   await page.getByRole("button", { name: "Repair and deploy" }).click();
@@ -137,8 +137,8 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   await expect(page.getByLabel("Right shoulder")).toHaveCount(0);
   // The heavy build is too much for a scout.
   await expect(page.getByText(/Over capacity/)).toBeVisible();
-  await page.locator("select").and(page.getByLabel("Plating")).selectOption("lightPlating");
-  await page.getByLabel("Left arm").selectOption("");
+  await fitPart(page, "Plating", "lightPlating");
+  await fitPart(page, "Left arm", "");
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeEnabled();
   await page.screenshot({ path: `${SHOTS}/14-hangar-light.png` });
   await page.getByRole("button", { name: "Repair and deploy" }).click();

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { approachOutpost, boot, SHOTS, startGame, waitTicks } from "./helpers";
+import { approachOutpost, boot, fitPart, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("mission loop: clear outpost, salvage, return, refit in hangar, progress is saved", async ({ page }) => {
   const errors = await boot(page);
@@ -54,7 +54,7 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   }
   const looted = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { crates: w.salvage.countAt(null), scrap: w.save.scrap, items: w.itemsSalvaged, inventory: w.save.inventory };
+    return { crates: w.salvage.countAt(null), scrap: w.save.scrap, items: w.itemsSalvaged, inventory: w.save.inventory.map((item) => item.id) };
   });
   expect(looted.crates).toBe(0);
   expect(looted.scrap).toBeGreaterThanOrEqual(5 * 12);
@@ -75,16 +75,16 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   // Hangar: fit a salvaged weapon in place of the rifle.
   await page.keyboard.press("KeyH");
   await expect(page.getByRole("heading", { name: /Hangar/ })).toBeVisible();
-  const salvagedWeapon = Object.keys(looted.inventory).find((id) => ["slugCannon", "swarmPod"].includes(id));
+  const salvagedWeapon = looted.inventory.find((id) => ["slugCannon", "swarmPod"].includes(id));
   if (salvagedWeapon) {
-    await page.getByLabel("Right arm").selectOption(salvagedWeapon);
+    await fitPart(page, "Right arm", salvagedWeapon);
   }
   // An unarmed build is refused.
-  await page.getByLabel("Right arm").selectOption("");
-  await page.getByLabel("Left arm").selectOption("");
+  await fitPart(page, "Right arm", "");
+  await fitPart(page, "Left arm", "");
   await expect(page.getByText("No weapon fitted")).toBeVisible();
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeDisabled();
-  await page.getByLabel("Right arm").selectOption("arcLauncher");
+  await fitPart(page, "Right arm", "arcLauncher");
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeEnabled();
   await page.screenshot({ path: `${SHOTS}/10-hangar.png` });
   await page.getByRole("button", { name: "Repair and deploy" }).click();

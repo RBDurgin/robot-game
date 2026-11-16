@@ -1,6 +1,7 @@
 import { HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
-import { isPlatingId, isWeaponId, startingInventory, type Inventory } from "../sim/loadout";
+import { addItem, findItem, fitFromLoadout, isPlatingItem, isWeaponItem, parseSpec, plainSpec, type Fit, type Inventory, type Item } from "../sim/items";
+import { isPlatingId, isWeaponId } from "../sim/loadout";
 import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
 import type { WarState } from "../sim/war";
 
@@ -12,10 +13,22 @@ export interface Settings {
   defaultView: "third" | "cockpit";
 }
 
+/**
+ * The save format's version. Saves from before versions were written count as 1, whatever phase
+ * they came from: `parseSave` has always read those leniently. Each later change adds a step to
+ * `MIGRATIONS`, so any old save is brought forward one version at a time.
+ *
+ * 2: parts are individual items with a tier and modifiers; the loadout became a `fit` of them.
+ */
+export const SAVE_VERSION = 2;
+
 export interface SaveData {
+  version: number;
   /** The frame the player's suit is built on. */
   frame: FrameId;
-  loadout: Loadout;
+  /** Which of the player's items are on the suit. */
+  fit: Fit;
+  /** Every part the player owns, fitted ones included. */
   inventory: Inventory;
   scrap: number;
   settings: Settings;
@@ -50,10 +63,12 @@ const KEY = "robot-game-save-v1";
 export const DEFAULT_SETTINGS: Settings = { sensitivity: 0.0022, volume: 0.6, defaultView: "third" };
 
 export function freshSave(): SaveData {
+  const inventory: Inventory = [];
   return {
+    version: SAVE_VERSION,
     frame: "medium",
-    loadout: { weapons: { ...STARTING_LOADOUT.weapons }, plating: STARTING_LOADOUT.plating },
-    inventory: startingInventory(STARTING_LOADOUT),
+    fit: fitFromLoadout(STARTING_LOADOUT, inventory),
+    inventory,
     scrap: 0,
     settings: { ...DEFAULT_SETTINGS },
     position: null,
@@ -88,29 +103,71 @@ function parseIds(raw: unknown): string[] {
   return Array.isArray(raw) ? [...new Set(raw.filter((v): v is string => typeof v === "string"))] : [];
 }
 
+/**
+ * Version 1 to 2: the inventory was a count per part id and the loadout named part ids. Every
+ * part owned becomes a plain Mk I item, and the fit picks out the ones the loadout used. A
+ * loadout always gets its parts, even if the old inventory did not list them.
+ */
+function toItems(data: Record<string, unknown>): void {
+  const inventory: Inventory = [];
+  if (data.inventory && typeof data.inventory === "object" && !Array.isArray(data.inventory)) {
+    for (const [id, count] of Object.entries(data.inventory)) {
+      if (!(isWeaponId(id) || isPlatingId(id)) || typeof count !== "number") continue;
+      for (let i = 0; i < Math.min(99, Math.floor(count)); i++) addItem(inventory, plainSpec(id));
+    }
+  }
+  const loadout = parseLoadout(data.loadout) ?? STARTING_LOADOUT;
+  data.fit = fitFromLoadout(loadout, inventory);
+  data.inventory = inventory;
+  delete data.loadout;
+}
+
+/** `MIGRATIONS[n]` turns version n data into version n + 1, in place. */
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems };
+
+/** A copy of stored data brought up to the current version. */
+export function migrateSave(raw: Record<string, unknown>): Record<string, unknown> {
+  const data = { ...raw };
+  let version = typeof data.version === "number" && data.version >= 1 ? Math.floor(data.version) : 1;
+  for (; version < SAVE_VERSION; version++) MIGRATIONS[version]!(data);
+  data.version = SAVE_VERSION;
+  return data;
+}
+
+/** Read the items and the fit, dropping anything invalid, and never leave the suit unusable. */
+function parseParts(data: Record<string, unknown>): { inventory: Inventory; fit: Fit } {
+  const inventory: Inventory = [];
+  for (const raw of Array.isArray(data.inventory) ? data.inventory : []) {
+    const spec = parseSpec(raw);
+    const uid = (raw as { uid?: unknown } | null)?.uid;
+    if (!spec || typeof uid !== "number" || !Number.isInteger(uid) || uid < 1 || findItem(inventory, uid)) continue;
+    inventory.push({ uid, ...spec });
+  }
+  const stored = (data.fit && typeof data.fit === "object" ? data.fit : {}) as { weapons?: unknown; plating?: unknown };
+  const slots = (stored.weapons && typeof stored.weapons === "object" ? stored.weapons : {}) as Record<string, unknown>;
+  const weapons: Fit["weapons"] = {};
+  const used = new Set<number>();
+  for (const id of HARDPOINT_IDS) {
+    const item = typeof slots[id] === "number" ? findItem(inventory, slots[id]) : undefined;
+    if (!item || !isWeaponItem(item) || used.has(item.uid)) continue;
+    weapons[id] = item.uid;
+    used.add(item.uid);
+  }
+  // With no weapon to their name the player could be stuck: issue the starting pair again.
+  if (!inventory.some((item: Item) => isWeaponItem(item))) Object.assign(weapons, fitFromLoadout(STARTING_LOADOUT, inventory).weapons);
+  const fitted = typeof stored.plating === "number" ? findItem(inventory, stored.plating) : undefined;
+  const plating = fitted && isPlatingItem(fitted) ? fitted : (inventory.find((item) => isPlatingItem(item)) ?? addItem(inventory, plainSpec(STARTING_LOADOUT.plating)));
+  return { inventory, fit: { weapons, plating: plating.uid } };
+}
+
 /** Build a save from stored data, keeping whatever is valid and defaulting the rest. */
 export function parseSave(raw: unknown): SaveData {
   const save = freshSave();
   if (!raw || typeof raw !== "object") return save;
-  const data = raw as Record<string, unknown>;
+  const data = migrateSave(raw as Record<string, unknown>);
   // Saves from before there was a choice of frame have none: they were all medium.
   if (isFrameId(data.frame)) save.frame = data.frame;
-  const loadout = parseLoadout(data.loadout);
-  if (loadout) save.loadout = loadout;
-  if (data.inventory && typeof data.inventory === "object") {
-    const inv: Inventory = {};
-    for (const [id, count] of Object.entries(data.inventory)) {
-      if ((isWeaponId(id) || isPlatingId(id)) && typeof count === "number" && count > 0) inv[id] = Math.floor(count);
-    }
-    // Never let a save leave the player without what their loadout needs.
-    for (const [id, count] of Object.entries(startingInventory(save.loadout))) {
-      const key = id as keyof Inventory;
-      inv[key] = Math.max(inv[key] ?? 0, count);
-    }
-    save.inventory = inv;
-  } else {
-    save.inventory = startingInventory(save.loadout);
-  }
+  Object.assign(save, parseParts(data));
   if (typeof data.scrap === "number" && data.scrap >= 0) save.scrap = Math.floor(data.scrap);
   const s = data.settings as Partial<Settings> | undefined;
   if (s && typeof s === "object") {

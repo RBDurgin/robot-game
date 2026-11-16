@@ -1,8 +1,8 @@
 import { ECONOMY, PRICES } from "../data/economy";
-import type { Loadout } from "../data/loadouts";
 import { SECTION_IDS } from "../data/frames";
 import type { Health } from "./damage";
-import { addItem, itemsUsed, type Inventory, type ItemId } from "./loadout";
+import { addItem, findItem, fitUses, plainSpec, removeItem, type Fit, type Inventory, type Item, type ItemSpec } from "./items";
+import type { ItemId } from "./loadout";
 
 /** The player's money and parts. `SaveData` is one. */
 export interface Wallet {
@@ -28,35 +28,33 @@ export function repairBill(cost: number, scrap: number): number {
   return Math.max(0, Math.min(cost, ECONOMY.repairCap, Math.floor(scrap)));
 }
 
+/** The price of a plain Mk I part at a base. */
 export const buyPrice = (id: ItemId): number => PRICES[id];
-export const sellPrice = (id: ItemId): number => Math.floor(PRICES[id] * ECONOMY.sellRatio);
+
+/** What a part is worth: its price, raised for each tier above the first and each modifier. */
+export const itemValue = (spec: ItemSpec): number => PRICES[spec.id] * (1 + ECONOMY.tierValue * (spec.tier - 1)) * (1 + ECONOMY.modValue * spec.mods.length);
+export const sellPrice = (spec: ItemSpec): number => Math.floor(itemValue(spec) * ECONOMY.sellRatio);
 
 /**
- * How many of an item can go without breaking any of the given loadouts. The hangar passes both
- * the build being edited and the one last deployed, so a part in use cannot be sold from under
+ * True if an item can go without breaking any of the given fits. The hangar passes both the
+ * build being edited and the one last deployed, so a part in use cannot be sold from under
  * either.
  */
-export function spareCount(inventory: Inventory, id: ItemId, loadouts: Loadout[]): number {
-  let needed = 0;
-  for (const loadout of loadouts) needed = Math.max(needed, itemsUsed(loadout)[id] ?? 0);
-  return Math.max(0, (inventory[id] ?? 0) - needed);
-}
+export const isSpare = (uid: number, fits: Fit[]): boolean => !fits.some((fit) => fitUses(fit).includes(uid));
 
-/** Buy one of an item. Returns false, changing nothing, if the player cannot afford it. */
-export function buyItem(wallet: Wallet, id: ItemId): boolean {
+/** Buy one plain part. Returns it, or null (changing nothing) if the player cannot afford it. */
+export function buyItem(wallet: Wallet, id: ItemId): Item | null {
   const price = buyPrice(id);
-  if (wallet.scrap < price) return false;
+  if (wallet.scrap < price) return null;
   wallet.scrap -= price;
-  addItem(wallet.inventory, id);
-  return true;
+  return addItem(wallet.inventory, plainSpec(id));
 }
 
-/** Sell one spare of an item. Returns false, changing nothing, if there is none to spare. */
-export function sellItem(wallet: Wallet, id: ItemId, loadouts: Loadout[]): boolean {
-  if (spareCount(wallet.inventory, id, loadouts) < 1) return false;
-  const left = (wallet.inventory[id] ?? 0) - 1;
-  if (left > 0) wallet.inventory[id] = left;
-  else delete wallet.inventory[id];
-  wallet.scrap += sellPrice(id);
+/** Sell an item. Returns false, changing nothing, if it is in use or not the player's. */
+export function sellItem(wallet: Wallet, uid: number, fits: Fit[]): boolean {
+  const item = findItem(wallet.inventory, uid);
+  if (!item || !isSpare(uid, fits)) return false;
+  removeItem(wallet.inventory, uid);
+  wallet.scrap += sellPrice(item);
   return true;
 }

@@ -2,9 +2,9 @@ import { CharacterSupportedState, PhysicsCharacterController, Scene, Vector3 } f
 import { FACTIONS, type FactionId } from "../data/factions";
 import { HARDPOINT_IDS, type FrameDef, type HardpointDef, type HardpointId, type SectionId } from "../data/frames";
 import type { Loadout } from "../data/loadouts";
-import { WEAPONS, type WeaponDef } from "../data/weapons";
+import type { WeaponDef } from "../data/weapons";
 import { createHealth, mobilityFor, repairAll, type Health } from "../sim/damage";
-import { fitToFrame, loadoutStats } from "../sim/loadout";
+import { fitToFrame, kitOf, kitStats, kitToFrame, type Kit } from "../sim/loadout";
 import type { Intent } from "../sim/intent";
 import type { Vec3 } from "../sim/math";
 import { createMechState, stepMech, type MechState } from "../sim/mech";
@@ -25,6 +25,8 @@ export interface MechSpawn {
   position: Vec3;
   yaw: number;
   loadout: Loadout;
+  /** The parts' actual numbers, where they differ from stock (the player's own items). */
+  kit?: Kit;
   armorScale?: number;
   damageScale?: number;
 }
@@ -80,7 +82,7 @@ export class MechEntity {
     this.state = createMechState(spawn.frame, spawn.yaw);
     this.baseArmorScale = spawn.armorScale ?? 1;
     this.visual = new MechVisual(scene, spawn.name, FACTIONS[spawn.faction].colors, spawn.frame);
-    this.applyLoadout(spawn.loadout);
+    this.applyLoadout(spawn.loadout, spawn.kit);
 
     const half = spawn.frame.height / 2;
     this.controller = new PhysicsCharacterController(
@@ -113,11 +115,12 @@ export class MechEntity {
 
   /**
    * Fit a loadout (anything this frame cannot mount is left off). This rebuilds the mech's
-   * armor, so it also fully repairs it.
+   * armor, so it also fully repairs it. `kit` gives the parts' numbers when they are not stock.
    */
-  applyLoadout(loadout: Loadout): void {
+  applyLoadout(loadout: Loadout, kit: Kit = kitOf(loadout)): void {
     this.loadout = fitToFrame(this.frame, loadout);
-    const stats = loadoutStats(this.frame, this.loadout);
+    const fitted = kitToFrame(this.frame, kit);
+    const stats = kitStats(this.frame, fitted);
     this.loadMobility = stats.mobility;
     this.health = createHealth(this.frame, this.baseArmorScale * stats.armorScale);
     this.visual.setArmVisible("armL", true);
@@ -125,8 +128,8 @@ export class MechEntity {
     this.mounted = [];
     for (const id of HARDPOINT_IDS) {
       const hardpoint = this.frame.hardpoints.find((h) => h.id === id);
-      const weaponId = this.loadout.weapons[id];
-      const mount: MountedWeapon | null = hardpoint && weaponId ? { def: WEAPONS[weaponId], hardpoint, cooldown: 0, beamTime: 0 } : null;
+      const def = fitted.weapons[id];
+      const mount: MountedWeapon | null = hardpoint && def ? { def, hardpoint, cooldown: 0, beamTime: 0 } : null;
       this.weapons[id] = mount;
       if (mount) this.mounted.push(mount);
       if (hardpoint) this.visual.setWeapon(id, mount ? mount.def.shape : null);

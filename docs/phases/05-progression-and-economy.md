@@ -40,10 +40,18 @@ Scrap is collected in the slice but buys nothing. Once there are several frames 
   the player has. The hangar has a parts store: every part is for sale at the price in `PRICES`
   and sells back at `ECONOMY.sellRatio`. A part on the bench build or the deployed build cannot be
   sold. Rules are in `src/sim/economy.ts`, numbers in `src/data/economy.ts`.
+- Step 2. Every part the player owns is an `Item` with a tier (Mk I to III, +8% damage or armor
+  per tier) and up to two modifiers (`src/data/mods.ts`). The player's build is a `Fit` of item
+  uids; AI pilots still use a `Loadout` of part ids. Both resolve to a `Kit` of definitions, which
+  is what a mech is built from. Drops roll tier and modifiers from the odds in the loot table;
+  bases sell only plain parts. Rules are in `src/sim/items.ts`.
+- Step 5, first half. Saves carry a `version`; `MIGRATIONS` in `src/game/save.ts` brings old ones
+  forward a version at a time. Every save from before this counts as version 1.
 
 ## For the playtest
 
 - Whether a lost suit (74 scrap on the medium frame, about three kills) stings the right amount.
+- Whether a Mk II or a modified part is noticeable in a fight, and worth swapping for.
 - Whether prices (120 to 300 for a weapon) make a purchase feel earned over the first hour.
 
 ## Out of scope
@@ -74,10 +82,10 @@ Story rewards (phase 6). Balance for a full-length game; aim for a curve that ho
 
 - [x] Progression shape and death cost agreed
 - [x] Repair costs and shop
-- [ ] Item instances with tiers and modifiers
+- [x] Item instances with tiers and modifiers
 - [ ] Loot tables by faction and region
 - [ ] Frame and hardpoint unlocks
-- [ ] Versioned saves with migrations
+- [x] Versioned saves with migrations
 - [ ] Save slots, IndexedDB, export and import
 - [ ] Difficulty by region
 - [ ] User playtest and sign-off

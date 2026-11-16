@@ -55,3 +55,22 @@ export async function approachOutpost(page: Page): Promise<void> {
   });
   await page.waitForFunction(() => window.__game!.world.enemies.length === 5, undefined, { timeout: 60_000 });
 }
+
+/**
+ * In the hangar, fit a part of the given kind to a slot ("" empties it). Slots list the player's
+ * individual items, so this picks one of that kind which no other slot is using.
+ */
+export async function fitPart(page: Page, slot: string, itemId: string): Promise<void> {
+  const select = page.locator("select").and(page.getByLabel(slot));
+  if (itemId === "") {
+    await select.selectOption("");
+    return;
+  }
+  const value = await select.evaluate((el, id) => {
+    const self = el as HTMLSelectElement;
+    const taken = new Set([...document.querySelectorAll("select")].filter((s) => s !== self).map((s) => s.value));
+    const options = [...self.options].filter((o) => o.dataset.item === id);
+    return (options.find((o) => !taken.has(o.value)) ?? options[0])?.value ?? `no ${id} on offer`;
+  }, itemId);
+  await select.selectOption(value);
+}

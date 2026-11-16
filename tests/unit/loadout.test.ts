@@ -7,7 +7,7 @@ import { GARRISONS, RAID_SQUAD, type SquadDef } from "../../src/data/encounters"
 import { FACTIONS, WAR_FACTION_IDS, type SquadMember } from "../../src/data/factions";
 
 const SQUADS: SquadDef[] = Object.values(GARRISONS).flat();
-import { addItem, fitToFrame, itemsUsed, loadoutProblems, loadoutStats, startingInventory } from "../../src/sim/loadout";
+import { fitToFrame, loadoutProblems, loadoutStats } from "../../src/sim/loadout";
 import { rollLoot } from "../../src/sim/loot";
 import { makeRng } from "../../src/sim/math";
 
@@ -31,30 +31,20 @@ describe("loadout", () => {
 
   it("flags an overweight build", () => {
     const build: Loadout = { weapons: { armL: "arcLauncher", armR: "slugCannon" }, plating: "heavyPlating" };
-    const inv = itemsUsed(build);
     expect(loadoutStats(frame, build).overweight).toBe(true);
-    expect(loadoutProblems(frame, build, inv).some((p) => p.includes("Over capacity"))).toBe(true);
-  });
-
-  it("requires owning every fitted item, twice for a matched pair", () => {
-    const inv = startingInventory(STARTING_LOADOUT);
-    expect(loadoutProblems(frame, STARTING_LOADOUT, inv)).toEqual([]);
-    const twin: Loadout = { weapons: { armL: "pulseRifle", armR: "pulseRifle" }, plating: "standardPlating" };
-    expect(loadoutProblems(frame, twin, inv).length).toBe(1);
-    addItem(inv, "pulseRifle");
-    expect(loadoutProblems(frame, twin, inv)).toEqual([]);
+    expect(loadoutProblems(frame, build).some((p) => p.includes("Over capacity"))).toBe(true);
   });
 
   it("refuses to deploy unarmed", () => {
     const build: Loadout = { weapons: {}, plating: "standardPlating" };
-    expect(loadoutProblems(frame, build, itemsUsed(build))).toContain("No weapon fitted");
+    expect(loadoutProblems(frame, build)).toContain("No weapon fitted");
   });
 
   it("every pilot on every faction's roster carries a loadout its frame can deploy, unchanged", () => {
     for (const id of WAR_FACTION_IDS) {
       for (const [slot, member] of Object.entries(FACTIONS[id].roster) as [string, SquadMember][]) {
         const loadout = ENEMY_LOADOUTS[member.loadout];
-        expect(loadoutProblems(FRAMES[member.frame], loadout, itemsUsed(loadout)), `${id} ${slot}`).toEqual([]);
+        expect(loadoutProblems(FRAMES[member.frame], loadout), `${id} ${slot}`).toEqual([]);
         expect(fitToFrame(FRAMES[member.frame], loadout), `${id} ${slot}`).toEqual(loadout);
       }
     }
@@ -78,19 +68,18 @@ describe("hardpoints", () => {
   it("only the heavy frame has shoulder mounts", () => {
     expect(heavy.hardpoints.map((h) => h.id)).toEqual(["armR", "armL", "shoulderR", "shoulderL"]);
     expect(FRAMES.light.hardpoints.map((h) => h.id)).toEqual(["armR", "armL"]);
-    expect(loadoutProblems(heavy, shoulders, itemsUsed(shoulders))).toEqual([]);
-    expect(loadoutProblems(frame, shoulders, itemsUsed(shoulders)).some((p) => p.includes("no mount"))).toBe(true);
+    expect(loadoutProblems(heavy, shoulders)).toEqual([]);
+    expect(loadoutProblems(frame, shoulders).some((p) => p.includes("no mount"))).toBe(true);
   });
 
   it("shoulder mounts refuse weapons that are not built for them", () => {
     const build: Loadout = { weapons: { shoulderR: "pulseRifle" }, plating: "standardPlating" };
-    expect(loadoutProblems(heavy, build, itemsUsed(build)).some((p) => p.includes("does not fit"))).toBe(true);
+    expect(loadoutProblems(heavy, build).some((p) => p.includes("does not fit"))).toBe(true);
   });
 
   it("counts shoulder weapons toward mass and items used", () => {
     const stats = loadoutStats(heavy, shoulders);
     expect(stats.mass).toBeCloseTo(WEAPONS.slugCannon.mass + WEAPONS.seekerRack.mass + WEAPONS.arcLauncher.mass + PLATING.standardPlating.mass, 5);
-    expect(itemsUsed(shoulders)).toEqual({ slugCannon: 1, seekerRack: 1, arcLauncher: 1, standardPlating: 1 });
   });
 
   it("moving a build to a smaller frame drops what it cannot mount", () => {
@@ -117,7 +106,7 @@ describe("rollLoot", () => {
       const drop = rollLoot(ENEMY_LOADOUTS.marksman, rng);
       expect(drop.scrap).toBeGreaterThanOrEqual(12);
       expect(drop.scrap).toBeLessThanOrEqual(30);
-      for (const item of drop.items) seen.add(item);
+      for (const item of drop.items) seen.add(item.id);
     }
     expect(seen.has("slugCannon")).toBe(true);
     expect(seen.has("pulseRifle")).toBe(false);
@@ -127,11 +116,12 @@ describe("rollLoot", () => {
   });
 
   it("respects drop chances at the extremes", () => {
-    const never = { weaponChance: 0, platingChance: 0, platingWeights: { lightPlating: 1, standardPlating: 0, heavyPlating: 1 }, scrapMin: 5, scrapMax: 5 };
+    const never = { weaponChance: 0, platingChance: 0, platingWeights: { lightPlating: 1, standardPlating: 0, heavyPlating: 1 }, scrapMin: 5, scrapMax: 5, tierWeights: [1, 0, 0] as [number, number, number], modChance: 0, secondModChance: 0 };
     expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), never)).toEqual({ items: [], scrap: 5 });
     const always = { ...never, weaponChance: 1 };
-    expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), always).items).toEqual(["pulseRifle", "arcLauncher"]);
+    expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), always).items.map((i) => i.id)).toEqual(["pulseRifle", "arcLauncher"]);
     // Shoulder weapons can be salvaged too.
-    expect(rollLoot(ENEMY_LOADOUTS.bombard, makeRng(1), always).items).toEqual(["slugCannon", "seekerRack", "seekerRack"]);
+    expect(rollLoot(ENEMY_LOADOUTS.bombard, makeRng(1), always).items.map((i) => i.id)).toEqual(["slugCannon", "seekerRack", "seekerRack"]);
+    expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), always).items.every((i) => i.tier === 1 && i.mods.length === 0)).toBe(true);
   });
 });

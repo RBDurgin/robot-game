@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { boot, SHOTS, startGame, waitTicks } from "./helpers";
+import { boot, fitPart, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("economy: repairs are billed, parts are bought, fitted and sold, and it all persists", async ({ page }) => {
   await page.addInitScript(() => {
@@ -19,20 +19,20 @@ test("economy: repairs are billed, parts are bought, fitted and sold, and it all
 
   await page.keyboard.press("KeyH");
   await expect(page.getByRole("heading", { name: /Hangar/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Parts store · 400 scrap" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your parts · 400 scrap" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Repair and deploy · 18 scrap" })).toBeVisible();
 
   // Nothing fitted can be sold, and the seeker rack is out of reach after buying a cannon.
   await expect(page.getByRole("button", { name: /^Sell PR-2 Pulse Rifle/ })).toBeDisabled();
   await page.getByRole("button", { name: /^Buy SC-9 Slug Cannon/ }).click();
-  await expect(page.getByRole("heading", { name: "Parts store · 220 scrap" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your parts · 220 scrap" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Buy .*Seeker/ })).toBeDisabled();
   await page.getByRole("button", { name: /^Buy SC-9 Slug Cannon/ }).click();
   await page.getByRole("button", { name: /^Sell SC-9 Slug Cannon/ }).click();
-  await expect(page.getByRole("heading", { name: "Parts store · 112 scrap" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your parts · 112 scrap" })).toBeVisible();
 
   // The cannon bought is on offer in the arm slots; once fitted it cannot be sold.
-  await page.getByLabel("Right arm").selectOption("slugCannon");
+  await fitPart(page, "Right arm", "slugCannon");
   await expect(page.getByRole("button", { name: /^Sell SC-9 Slug Cannon/ })).toBeDisabled();
   // The rifle is off the bench build but still on the suit outside, so it stays unsellable.
   await expect(page.getByRole("button", { name: /^Sell PR-2 Pulse Rifle/ })).toBeDisabled();
@@ -59,12 +59,28 @@ test("economy: repairs are billed, parts are bought, fitted and sold, and it all
   // A whole medium suit is 610 points: 74 scrap the first time, then all of the 20 that is left.
   expect(died).toEqual({ first: 20, second: 0, alive: true });
 
+  // A salvaged part keeps its mark and modifiers: it shows in the hangar, tunes the weapon and
+  // is worth more than a plain one.
+  const tuned = await page.evaluate(() => {
+    const w = window.__game!.world;
+    w.save.inventory.push({ uid: 99, id: "pulseRifle", tier: 3, mods: ["cooled", "rapid"] });
+    w.deploy("medium", { weapons: { armR: 99 }, plating: w.save.fit.plating });
+    const def = w.player.weapons.armR!.def;
+    return { damage: def.damage, heat: def.heat, cooldown: def.cooldown };
+  });
+  expect(tuned).toEqual({ damage: 9.3, heat: 2.21, cooldown: 0.099 });
+  await page.keyboard.press("KeyH");
+  await expect(page.getByRole("button", { name: "Sell PR-2 Pulse Rifle Mk III · Cooled, Rapid for 144 scrap" })).toBeDisabled();
+  await page.screenshot({ path: `${SHOTS}/21-tiered-part.png` });
+  await page.getByRole("button", { name: /Repair and deploy/ }).click();
+  await waitTicks(page, 5);
+
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   const reloaded = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id, cannons: w.save.inventory.slugCannon, rifles: w.save.inventory.pulseRifle };
+    return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id, version: w.save.version, parts: w.save.inventory.map((item) => item.id).sort() };
   });
-  expect(reloaded).toEqual({ scrap: 0, armR: "slugCannon", cannons: 1, rifles: 1 });
+  expect(reloaded).toEqual({ scrap: 0, armR: "pulseRifle", version: 2, parts: ["arcLauncher", "pulseRifle", "pulseRifle", "slugCannon", "standardPlating"] });
   expect(errors).toEqual([]);
 });

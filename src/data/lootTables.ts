@@ -11,12 +11,23 @@ export const LOOT = {
   platingWeights: { lightPlating: 3, standardPlating: 0, heavyPlating: 2 } satisfies Record<PlatingId, number>,
   scrapMin: 12,
   scrapMax: 30,
+  /** Relative odds of a recovered part being Mk I, II or III. */
+  tierWeights: [72, 23, 5] as [number, number, number],
+  /** Chance that a recovered part carries a modifier, and that one which does carries a second. */
+  modChance: 0.3,
+  secondModChance: 0.25,
 };
+
+export type LootTable = typeof LOOT;
 
 /** What a salvage crate at a depot, wreck or landmark holds. */
 export const CACHE_LOOT = {
   scrapMin: 20,
   scrapMax: 45,
+  /** Crates are the better source of unusual parts. */
+  tierWeights: [55, 35, 10] as [number, number, number],
+  modChance: 0.5,
+  secondModChance: 0.3,
   /** Chance that a crate holds a part as well as scrap. */
   itemChance: 0.6,
   /** Relative odds of which part it is. */

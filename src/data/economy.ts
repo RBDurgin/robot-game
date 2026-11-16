@@ -8,9 +8,15 @@ export const ECONOMY = {
   repairCap: 90,
   /** Share of an item's price paid back when it is sold. */
   sellRatio: 0.4,
+  /** Extra worth of a part per tier above the first, and per modifier, as a share of its price. */
+  tierValue: 0.5,
+  modValue: 0.25,
 };
 
-/** What each part costs at a base. Every part is for sale; drops are the cheaper way to get one. */
+/**
+ * What a plain Mk I part costs at a base. Every part is for sale, but only plain: tiers and
+ * modifiers come from salvage.
+ */
 export const PRICES = {
   pulseRifle: 120,
   slugCannon: 180,

@@ -1,12 +1,12 @@
 import { FRAME_IDS, FRAMES, type FrameDef, type FrameId, type Trigger } from "../data/frames";
-import type { Loadout } from "../data/loadouts";
-import { PLATING, type PlatingId } from "../data/parts";
-import { WEAPONS, type WeaponId } from "../data/weapons";
+import { MODS } from "../data/mods";
+import type { WeaponDef } from "../data/weapons";
 import type { Settings } from "../game/save";
 import type { WorldModel } from "../sim/terrain";
 import { drawMap, type MapSite, type MapTerritory } from "./mapView";
-import { buyItem, buyPrice, repairBill, sellItem, sellPrice, spareCount, type Wallet } from "../sim/economy";
-import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type ItemId } from "../sim/loadout";
+import { buyItem, buyPrice, isSpare, repairBill, sellItem, sellPrice, type Wallet } from "../sim/economy";
+import { findItem, fitKit, fitProblems, fitToFrame, isPlatingItem, isWeaponItem, plainSpec, specKey, specName, tunedPlating, tunedWeapon, type Fit, type Item, type ItemSpec } from "../sim/items";
+import { fitsMount, itemName, kitStats, type ItemId } from "../sim/loadout";
 import { PRICES } from "../data/economy";
 
 type Child = Node | string;
@@ -53,16 +53,15 @@ export interface PauseOptions {
 export interface HangarOptions {
   /** The frame the suit is built on now. */
   frame: FrameId;
-  loadout: Loadout;
   /** The build last deployed. Its parts cannot be sold, whatever is on the bench. */
-  fitted: Loadout;
+  fit: Fit;
   /** The player's scrap and parts. The shop changes both in place. */
   wallet: Wallet;
   /** What a full repair of the suit costs, before the cap and what the player can pay. */
   repairCost: number;
   /** Called after each purchase or sale, to save it. */
   onTrade(): void;
-  onDeploy(frame: FrameId, loadout: Loadout): void;
+  onDeploy(frame: FrameId, fit: Fit): void;
 }
 
 export interface MapOptions {
@@ -87,12 +86,18 @@ export interface MapOptions {
 const FIRE_KEYS: Record<Trigger, string> = { primary: "LMB", secondary: "RMB", tertiary: "E" };
 
 /** One line of numbers for a weapon, in the units that suit its kind. */
-function weaponLine(id: WeaponId | null): string {
-  if (!id) return "empty";
-  const w = WEAPONS[id];
-  if (w.kind === "beam") return `${w.name} · ${w.damage} dmg/s · ${w.heat} heat/s · ${w.range} m · ${w.mass} t`;
-  const damage = "pellets" in w ? `${w.pellets} x ${w.damage}` : String(w.damage);
-  return `${w.name} · ${damage} dmg · ${(1 / w.cooldown).toFixed(1)}/s · ${w.heat} heat · ${w.range} m · ${w.mass} t`;
+function weaponNumbers(w: WeaponDef): string {
+  if (w.kind === "beam") return `${w.damage} dmg/s · ${w.heat} heat/s · ${w.range} m · ${w.mass} t`;
+  const damage = w.pellets ? `${w.pellets} x ${w.damage}` : String(w.damage);
+  return `${damage} dmg · ${(1 / w.cooldown).toFixed(1)}/s · ${w.heat} heat · ${w.range} m · ${w.mass} t`;
+}
+
+/** What a part does, in a line: a weapon's numbers or a plating's armor and mass. */
+function partNumbers(spec: ItemSpec): string {
+  if (isWeaponItem(spec)) return weaponNumbers(tunedWeapon(spec));
+  if (!isPlatingItem(spec)) return "";
+  const p = tunedPlating(spec);
+  return `${Math.round(p.armorScale * 100)}% armor · ${p.mass} t`;
 }
 
 /** The three frames side by side, with the chosen one picked out. */
@@ -202,102 +207,128 @@ export class Screens {
   }
 
   showHangar(opts: HangarOptions): void {
+    const inventory = opts.wallet.inventory;
     let frameId = opts.frame;
-    let loadout: Loadout = fitToFrame(FRAMES[frameId], opts.loadout);
+    // The bench build: what is being put together, saved only on deploy.
+    let fit: Fit = fitToFrame(FRAMES[frameId], opts.fit, inventory);
 
-    const select = <T extends string>(label: string, options: [T, string][], current: T | null, allowEmpty: boolean, set: (v: T | null) => void): HTMLElement => {
+    const select = (label: string, options: Item[], current: number | undefined, allowEmpty: boolean, set: (uid: number | undefined) => void): HTMLElement => {
       const input = el("select");
       if (allowEmpty) {
         const o = el("option", "", ["Empty"]);
         o.value = "";
-        o.selected = current === null;
+        o.selected = current === undefined;
         input.append(o);
       }
-      for (const [id, text] of options) {
-        const o = el("option", "", [text]);
-        o.value = id;
-        o.selected = id === current;
+      for (const item of options) {
+        const o = el("option", "", [specName(item)]);
+        o.value = String(item.uid);
+        o.dataset.item = item.id;
+        o.selected = item.uid === current;
         input.append(o);
       }
-      input.addEventListener("change", () => set(input.value === "" ? null : (input.value as T)));
+      input.addEventListener("change", () => set(input.value === "" ? undefined : Number(input.value)));
       return el("label", "row", [el("span", "", [label]), input]);
     };
-    const itemOption = <T extends ItemId>(id: T): [T, string] => [id, `${itemName(id)} (x${opts.wallet.inventory[id] ?? 0})`];
+    // Best parts first, so the pick of several of a kind is at the top.
+    const ranked = (items: Item[]): Item[] => [...items].sort((a, b) => itemName(a.id).localeCompare(itemName(b.id)) || b.tier - a.tier || b.mods.length - a.mods.length || a.uid - b.uid);
 
-    // The panel is rebuilt when the frame changes, because the frame decides which mounts exist.
-    const render = (focusFrame: boolean): void => {
+    // The panel is rebuilt when the frame changes, because the frame decides which mounts exist,
+    // and after a trade, because the parts on offer in each slot change.
+    const render = (focusFrame: boolean, keepScroll = false): void => {
+      const scroll = keepScroll ? (this.root.firstElementChild?.scrollTop ?? 0) : 0;
       const frame: FrameDef = FRAMES[frameId];
-      const owned = (Object.entries(opts.wallet.inventory) as [ItemId, number][]).filter(([, n]) => n > 0);
-      const weaponsOwned = owned.filter(([id]) => isWeaponId(id)).map(([id]) => id as WeaponId);
-      const platingOwned = owned.filter(([id]) => !isWeaponId(id)).map(([id]) => id as PlatingId);
+      const weaponsOwned = ranked(inventory.filter((item) => isWeaponItem(item)));
+      const platingOwned = ranked(inventory.filter((item) => isPlatingItem(item)));
       const bill = repairBill(opts.repairCost, opts.wallet.scrap);
-      const sells: [ItemId, HTMLButtonElement][] = [];
+      const sells: [Item[], HTMLButtonElement][] = [];
+      const spare = (items: Item[]): Item | undefined => items.find((item) => isSpare(item.uid, [fit, opts.fit]));
       const stats = el("div", "stats");
       const problems = el("ul", "problems");
-      const deploy = button(bill > 0 ? `Repair and deploy · ${bill} scrap` : "Repair and deploy", () => opts.onDeploy(frameId, { weapons: { ...loadout.weapons }, plating: loadout.plating }));
+      const deploy = button(bill > 0 ? `Repair and deploy · ${bill} scrap` : "Repair and deploy", () => opts.onDeploy(frameId, { weapons: { ...fit.weapons }, plating: fit.plating }));
 
       const refresh = (): void => {
-        const s = loadoutStats(frame, loadout);
+        const kit = fitKit(fit, inventory);
+        const s = kitStats(frame, kit);
+        const fitted = (uid: number | undefined): string => {
+          const item = findItem(inventory, uid);
+          return item ? `${specName(item)} · ${partNumbers(item)}` : "empty";
+        };
         stats.replaceChildren(
           el("div", s.overweight ? "bad" : "", [`Load ${s.mass.toFixed(1)} / ${s.capacity} t`]),
           el("div", "", [`Speed ${Math.round(s.mobility * 100)}%`]),
           el("div", "", [`Armor ${Math.round(s.armorScale * 100)}%`]),
-          ...frame.hardpoints.map((h) => el("div", "dim", [`${h.name}: ${weaponLine(loadout.weapons[h.id] ?? null)}`])),
-          el("div", "dim", [`Plating: ${PLATING[loadout.plating].description}`]),
+          ...frame.hardpoints.map((h) => el("div", "dim", [`${h.name}: ${fitted(fit.weapons[h.id])}`])),
+          el("div", "dim", [`Plating: ${kit.plating.description}`]),
         );
-        const issues = loadoutProblems(frame, loadout, opts.wallet.inventory);
+        const issues = fitProblems(frame, fit, inventory);
         problems.replaceChildren(...issues.map((p) => el("li", "", [p])));
         deploy.disabled = issues.length > 0;
         // A part fitted on the bench stops being spare.
-        for (const [id, sell] of sells) sell.disabled = spareCount(opts.wallet.inventory, id, [loadout, opts.fitted]) < 1;
+        for (const [items, sell] of sells) sell.disabled = !spare(items);
       };
 
-      const frameSelect = select(
-        "Frame",
-        FRAME_IDS.map((id): [FrameId, string] => [id, `${FRAMES[id].name} (${FRAMES[id].weightClass})`]),
-        frameId,
-        false,
-        (v) => {
-          if (!v) return;
-          frameId = v;
-          loadout = fitToFrame(FRAMES[frameId], loadout);
-          render(true);
-        },
-      );
+      const frameSelect = el("label", "row", [el("span", "", ["Frame"])]);
+      const frameInput = el("select");
+      for (const id of FRAME_IDS) {
+        const o = el("option", "", [`${FRAMES[id].name} (${FRAMES[id].weightClass})`]);
+        o.value = id;
+        o.selected = id === frameId;
+        frameInput.append(o);
+      }
+      frameInput.addEventListener("change", () => {
+        frameId = frameInput.value as FrameId;
+        fit = fitToFrame(FRAMES[frameId], fit, inventory);
+        render(true);
+      });
+      frameSelect.append(frameInput);
 
       const slots = frame.hardpoints.map((h) =>
         select(
           `${h.name} · ${FIRE_KEYS[h.trigger]}`,
-          weaponsOwned.filter((id) => fitsMount(WEAPONS[id], h.mount)).map(itemOption),
-          loadout.weapons[h.id] ?? null,
+          weaponsOwned.filter((item) => isWeaponItem(item) && fitsMount(tunedWeapon(item), h.mount)),
+          fit.weapons[h.id],
           true,
-          (v) => {
-            if (v) loadout.weapons[h.id] = v;
-            else delete loadout.weapons[h.id];
-            refresh();
+          (uid) => {
+            // One item cannot be in two mounts: picking it here takes it off the other.
+            const other = frame.hardpoints.find((o) => o.id !== h.id && uid !== undefined && fit.weapons[o.id] === uid);
+            if (other) delete fit.weapons[other.id];
+            if (uid !== undefined) fit.weapons[h.id] = uid;
+            else delete fit.weapons[h.id];
+            if (other) render(false, true);
+            else refresh();
           },
         ),
       );
 
-      // Buying and selling rebuild the panel, since the parts on offer in each slot change.
       const trade = (done: boolean): void => {
         if (!done) return;
         opts.onTrade();
-        const scroll = this.root.firstElementChild?.scrollTop ?? 0;
-        render(false);
-        if (this.root.firstElementChild) this.root.firstElementChild.scrollTop = scroll;
+        render(false, true);
       };
-      const shop = el("table", "shop", [
+      const forSale = el("table", "shop", [
         el("tbody", "", (Object.keys(PRICES) as ItemId[]).map((id) => {
-          const have = opts.wallet.inventory[id] ?? 0;
-          const buy = button(`Buy · ${buyPrice(id)}`, () => trade(buyItem(opts.wallet, id)), "secondary");
+          const buy = button(`Buy · ${buyPrice(id)}`, () => trade(buyItem(opts.wallet, id) !== null), "secondary");
           buy.disabled = opts.wallet.scrap < buyPrice(id);
           buy.setAttribute("aria-label", `Buy ${itemName(id)} for ${buyPrice(id)} scrap`);
-          const sell = button(`Sell · ${sellPrice(id)}`, () => trade(sellItem(opts.wallet, id, [loadout, opts.fitted])), "secondary");
-          sells.push([id, sell]);
-          sell.setAttribute("aria-label", `Sell ${itemName(id)} for ${sellPrice(id)} scrap`);
-          const about = isWeaponId(id) ? weaponLine(id).split(" · ").slice(1).join(" · ") : PLATING[id].description;
-          return el("tr", have > 0 ? "" : "none", [el("th", "", [itemName(id)]), el("td", "count", [`x${have}`]), el("td", "about", [about]), el("td", "", [buy]), el("td", "", [sell])]);
+          return el("tr", "", [el("th", "", [itemName(id)]), el("td", "about", [partNumbers(plainSpec(id))]), el("td", "", [buy])]);
+        })),
+      ]);
+      // Interchangeable parts share a row.
+      const groups = new Map<string, Item[]>();
+      for (const item of [...weaponsOwned, ...platingOwned]) groups.set(specKey(item), [...(groups.get(specKey(item)) ?? []), item]);
+      const owned = el("table", "shop", [
+        el("tbody", "", [...groups.values()].map((items) => {
+          const first = items[0]!;
+          const sell = button(`Sell · ${sellPrice(first)}`, () => {
+            const item = spare(items);
+            trade(item !== undefined && sellItem(opts.wallet, item.uid, [fit, opts.fit]));
+          }, "secondary");
+          sell.setAttribute("aria-label", `Sell ${specName(first)} for ${sellPrice(first)} scrap`);
+          sells.push([items, sell]);
+          const name = el("th", first.tier > 1 || first.mods.length > 0 ? "special" : "", [specName(first)]);
+          name.title = first.mods.map((m) => `${MODS[m].name}: ${MODS[m].description}`).join(" ");
+          return el("tr", "", [name, el("td", "count", [`x${items.length}`]), el("td", "about", [partNumbers(first)]), el("td", "", [sell])]);
         })),
       ]);
 
@@ -307,19 +338,23 @@ export class Screens {
         frameTable(frameId),
         el("h2", "", ["Loadout"]),
         ...slots,
-        select("Plating", platingOwned.map(itemOption), loadout.plating, false, (v) => {
-          loadout.plating = v ?? loadout.plating;
+        select("Plating", platingOwned, fit.plating, false, (uid) => {
+          fit.plating = uid ?? fit.plating;
           refresh();
         }),
         stats,
         problems,
-        el("h2", "", [`Parts store · ${opts.wallet.scrap} scrap`]),
-        shop,
+        el("h2", "", [`Your parts · ${opts.wallet.scrap} scrap`]),
+        owned,
+        el("h2", "", ["Parts store"]),
+        el("p", "dim", ["Bases sell plain parts. Better marks and modified parts only come from salvage."]),
+        forSale,
         el("div", "actions", [deploy]),
       ]);
       refresh();
       this.show(panel);
-      if (focusFrame) frameSelect.querySelector("select")?.focus({ preventScroll: true });
+      panel.scrollTop = scroll;
+      if (focusFrame) frameInput.focus({ preventScroll: true });
     };
     render(false);
   }

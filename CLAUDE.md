@@ -24,14 +24,14 @@ Run `npm run check` after any gameplay change, and look at the screenshots.
 
 Three layers with a strict dependency direction: `sim` knows nothing about Babylon.
 
-- `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, loot,
+- `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, items, loot,
   the economy, terrain shape, chunk planning, site placement, sleeping mech records, the faction war,
   reputation).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
 - `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
   camera, save).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
-- `src/data/`: everything tunable (frames, weapons, plating, factions and their rosters, garrisons,
+- `src/data/`: everything tunable (frames, weapons, plating, tiers and modifiers, factions and their rosters, garrisons,
   war pace and reputation, loot, prices and repair costs, the world with its regions and sites, biomes, site layouts,
   streaming distances).
   Prefer changing data over changing code.
@@ -43,6 +43,9 @@ Key seams:
   appearance. Procedural parts implement it now; a glTF-backed implementation can be added later.
 - `FrameDef` (`src/data/frames.ts`): a frame is a data row: handling, abilities (dash charges,
   brace), hardpoints and model proportions. No frame has its own controller code.
+- `Kit` (`src/sim/loadout.ts`): the weapon and plating definitions a mech is built from. An AI
+  pilot's comes from a `Loadout` of part ids (`kitOf`); the player's from a `Fit` of their own
+  items, each with a tier and modifiers (`fitKit` in `src/sim/items.ts`).
 - Hardpoints: a `Loadout` maps hardpoint ids to weapons. Each hardpoint names the trigger that
   fires it and the section that carries it, so combat and the hangar loop over
   `frame.hardpoints` rather than naming arms.
@@ -103,11 +106,16 @@ Key seams:
 - Beam weapons give `damage` and `heat` per second, not per shot.
 - Repairs cost scrap (`src/sim/economy.ts`), on respawn and on deploying from a hangar. Tests that
   compare scrap across either must allow for the bill.
-- The hangar's shop changes `save.scrap` and `save.inventory` in place while the bench loadout is
-  still unsaved, so selling checks both the bench build and `save.loadout`.
+- The hangar's shop changes `save.scrap` and `save.inventory` in place while the bench build is
+  still unsaved, so selling checks both the bench build and `save.fit`.
+- The player's parts are items with their own numbers. Read a weapon's stats from the mounted
+  weapon's `def` (or `fitKit`), not from `WEAPONS[id]`, which is only the plain Mk I part.
+  `mech.loadout` still names part ids, for looks and for what a wreck drops.
+- When the save format changes, bump `SAVE_VERSION` and add a step to `MIGRATIONS`; do not edit an
+  old step.
 - Saves written before phase 2 have `armL`/`armR` in the loadout and no frame, and saves from
-  before phase 3 have no position or world progress. `parseSave` in `src/game/save.ts` reads all
-  of these; keep it that way when the save format changes again.
+  before phase 3 have no position or world progress. All of those count as version 1, and
+  `parseSave` in `src/game/save.ts` reads them; keep it that way.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 

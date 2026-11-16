@@ -4,17 +4,19 @@ import { ENEMY_TUNING } from "../data/encounters";
 import { cssColor, FACTIONS, isWarFactionId, PLAYER_FACTION, WAR_FACTION_IDS, type WarFactionId } from "../data/factions";
 import { FEEL } from "../data/feel";
 import { FRAMES, SECTION_IDS, type FrameId, type SectionId } from "../data/frames";
-import { ENEMY_LOADOUTS, type Loadout } from "../data/loadouts";
+import { ENEMY_LOADOUTS } from "../data/loadouts";
+import { PLATING } from "../data/parts";
 import { cacheSpots } from "../data/siteLayouts";
 import { STREAM } from "../data/streaming";
 import { REPUTATION, WAR } from "../data/war";
-import { WEAPONS, type WeaponId } from "../data/weapons";
+import { WEAPONS } from "../data/weapons";
 import { WORLD } from "../data/world";
 import { AI_ROLES } from "../sim/ai/brain";
 import { healthFraction, sectionFraction } from "../sim/damage";
 import { repairBill, repairCost } from "../sim/economy";
 import type { Intent } from "../sim/intent";
-import { addItem, itemName } from "../sim/loadout";
+import { addItem, fitKit, fitLoadout, plainSpec, specName, type Fit } from "../sim/items";
+import type { ItemId } from "../sim/loadout";
 import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
 import { rollCache, rollLoot } from "../sim/loot";
@@ -251,8 +253,8 @@ export class World {
     const save = loadSave();
     // `?arsenal` in the URL stocks the hangar with two of every weapon and plating, for playtests.
     if (new URLSearchParams(location.search).has("arsenal")) {
-      for (const id of [...Object.keys(WEAPONS), "lightPlating", "standardPlating", "heavyPlating"] as (WeaponId | "lightPlating")[]) {
-        save.inventory[id] = Math.max(save.inventory[id] ?? 0, 2);
+      for (const id of [...Object.keys(WEAPONS), ...Object.keys(PLATING)] as ItemId[]) {
+        for (let have = save.inventory.filter((item) => item.id === id).length; have < 2; have++) addItem(save.inventory, plainSpec(id));
       }
     }
     // Start where the player left off, or at the home base facing the first outpost.
@@ -267,7 +269,8 @@ export class World {
       faction: PLAYER_FACTION,
       position: World.groundPoint(model, start.x, start.z, 0.6),
       yaw: spawnYaw,
-      loadout: save.loadout,
+      loadout: fitLoadout(save.fit, save.inventory),
+      kit: fitKit(save.fit, save.inventory),
     });
 
     const input = new PlayerInput(canvas);
@@ -645,15 +648,14 @@ export class World {
     this.sfx.ui();
     this.screens.showHangar({
       frame: this.save.frame,
-      loadout: this.save.loadout,
-      fitted: this.save.loadout,
+      fit: this.save.fit,
       wallet: this.save,
       repairCost: repairCost(this.player.health),
       onTrade: () => {
         this.sfx.ui();
         writeSave(this.save);
       },
-      onDeploy: (frame, loadout) => this.deploy(frame, loadout),
+      onDeploy: (frame, fit) => this.deploy(frame, fit),
     });
   }
 
@@ -665,16 +667,16 @@ export class World {
   }
 
   /** Fit the frame and loadout chosen in the hangar, repair, and return to play. */
-  deploy(frame: FrameId, loadout: Loadout): void {
+  deploy(frame: FrameId, fit: Fit): void {
     const changed = frame !== this.save.frame;
     const bill = this.chargeRepair();
     this.save.frame = frame;
-    this.save.loadout = loadout;
+    this.save.fit = fit;
     writeSave(this.save);
     if (changed) {
       this.rebuildPlayer(frame);
     } else {
-      this.player.applyLoadout(loadout);
+      this.player.applyLoadout(fitLoadout(fit, this.save.inventory), fitKit(fit, this.save.inventory));
       this.player.restore();
     }
     const paid = bill > 0 ? ` Repairs cost ${bill} scrap.` : "";
@@ -694,7 +696,8 @@ export class World {
       faction: PLAYER_FACTION,
       position: at,
       yaw,
-      loadout: this.save.loadout,
+      loadout: fitLoadout(this.save.fit, this.save.inventory),
+      kit: fitKit(this.save.fit, this.save.inventory),
     });
     this.mechs[this.mechs.indexOf(old)] = this.player;
     for (const mech of this.mechs) if (mech.lock.target === old) mech.lock.target = null;
@@ -1033,7 +1036,7 @@ export class World {
       scrap += drop.scrap;
       for (const item of drop.items) {
         addItem(this.save.inventory, item);
-        names.push(itemName(item));
+        names.push(specName(item));
         this.itemsSalvaged++;
       }
     }
