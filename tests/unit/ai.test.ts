@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SIM_DT } from "../../src/sim/clock";
-import { createAiState, DEFAULT_AI, thinkAi, type AiView } from "../../src/sim/ai/brain";
+import { AI_ROLES, createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiView } from "../../src/sim/ai/brain";
 import { pickAttackers } from "../../src/sim/ai/squad";
 import { makeRng } from "../../src/sim/math";
 
@@ -150,5 +150,59 @@ describe("attack slots", () => {
     // 30 m farther is too much: the slot moves.
     expect([...pickAttackers([c("a", 90, true), c("b", 40, true), c("c", 60)], 2)].sort()).toEqual(["b", "c"]);
     expect(pickAttackers([c("a", 10)], 0).size).toBe(0);
+  });
+});
+
+describe("roles", () => {
+  /** Run an alerted pilot of a role against a visible target and collect what it did. */
+  const fight = (cfg: AiConfig, distance: number, seconds = 10) => {
+    const ai = createAiState();
+    ai.alerted = true;
+    const rng = makeRng(5);
+    const view = baseView({ target: target(distance) });
+    const seen = { strafed: 0, still: 0, dashes: 0, fired: false, steps: 0, last: thinkAi(ai, view, cfg, SIM_DT, rng, 0) };
+    for (let t = 0; t < seconds; t += SIM_DT) {
+      const intent = thinkAi(ai, view, cfg, SIM_DT, rng, seen.last.aimYaw);
+      seen.steps++;
+      if (intent.moveX !== 0) seen.strafed++;
+      if (intent.moveX === 0 && intent.moveZ === 0) seen.still++;
+      if (intent.boost) seen.dashes++;
+      seen.fired ||= intent.firePrimary || intent.fireSecondary || intent.fireTertiary;
+      seen.last = intent;
+    }
+    return seen;
+  };
+
+  it("a skirmisher closes to short range and never stands still", () => {
+    expect(fight(AI_ROLES.skirmisher, 90, 1).last.moveZ).toBe(1); // a line pilot would hold at 90 m
+    const close = fight(AI_ROLES.skirmisher, 30);
+    expect(close.still).toBe(0);
+    expect(close.strafed).toBe(close.steps);
+    expect(close.dashes).toBeGreaterThan(fight(AI_ROLES.line, 80).dashes);
+  });
+
+  it("a skirmisher holds fire until its short-ranged weapons can reach", () => {
+    expect(fight(AI_ROLES.skirmisher, AI_ROLES.skirmisher.fireRange + 30, 5).fired).toBe(false);
+    expect(fight(AI_ROLES.skirmisher, 30, 5).fired).toBe(true);
+  });
+
+  it("heavy support plants its feet inside its band, far back, and fires its shoulder weapons", () => {
+    const s = fight(AI_ROLES.support, 120);
+    expect(s.still).toBe(s.steps); // standing still is what lets a heavy frame brace
+    expect(s.fired).toBe(true);
+    expect(s.last.fireTertiary).toBe(s.last.fireSecondary);
+    // The same distance is too close for comfort once the target comes nearer.
+    expect(fight(AI_ROLES.support, AI_ROLES.support.minRange - 20, 1).last.moveZ).toBe(-1);
+    expect(AI_ROLES.support.minRange).toBeGreaterThan(AI_ROLES.line.minRange);
+  });
+
+  it("a pilot that stands its ground on purpose does not think it is stuck", () => {
+    const ai = createAiState();
+    ai.alerted = true;
+    const rng = makeRng(2);
+    const view = baseView({ target: target(120), speed: 0 });
+    let jumped = false;
+    for (let i = 0; i < 600; i++) jumped ||= thinkAi(ai, view, AI_ROLES.support, SIM_DT, rng, 0).jump;
+    expect(jumped).toBe(false);
   });
 });

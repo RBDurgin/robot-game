@@ -1,19 +1,21 @@
 import { CharacterSupportedState, PhysicsCharacterController, Scene, Vector3 } from "@babylonjs/core";
 import { FACTIONS, type FactionId } from "../data/factions";
-import type { FrameDef, SectionId } from "../data/frames";
+import { HARDPOINT_IDS, type FrameDef, type HardpointDef, type HardpointId, type SectionId } from "../data/frames";
 import type { Loadout } from "../data/loadouts";
 import { WEAPONS, type WeaponDef } from "../data/weapons";
 import { createHealth, mobilityFor, repairAll, type Health } from "../sim/damage";
-import { loadoutStats } from "../sim/loadout";
+import { fitToFrame, loadoutStats } from "../sim/loadout";
 import type { Intent } from "../sim/intent";
 import type { Vec3 } from "../sim/math";
 import { createMechState, stepMech, type MechState } from "../sim/mech";
-import { MechVisual, type ArmSide } from "../view/mechVisual";
+import { clearLock, createLock, type LockState } from "../sim/weapons";
+import { MechVisual } from "../view/mechVisual";
 import type { AiController } from "./aiController";
 import { GRAVITY, markMechShape } from "./physics";
 
 const DOWN = new Vector3(0, -1, 0);
-export const ARM_SIDES: readonly ArmSide[] = ["armR", "armL"];
+/** Height of the model that hardpoint muzzle offsets are measured on. */
+const REFERENCE_HEIGHT = 4.6;
 
 export interface MechSpawn {
   name: string;
@@ -29,7 +31,10 @@ export interface MechSpawn {
 
 export interface MountedWeapon {
   def: WeaponDef;
+  hardpoint: HardpointDef;
   cooldown: number;
+  /** Beams: time held since the last damage pulse. */
+  beamTime: number;
 }
 
 /**
@@ -44,7 +49,12 @@ export class MechEntity {
   health!: Health;
   loadout!: Loadout;
   readonly visual: MechVisual;
-  readonly weapons: Record<ArmSide, MountedWeapon | null> = { armL: null, armR: null };
+  /** Fitted weapon per hardpoint; null where nothing is fitted or the frame has no such mount. */
+  readonly weapons: Record<HardpointId, MountedWeapon | null> = { armR: null, armL: null, shoulderR: null, shoulderL: null };
+  /** The fitted weapons, in hardpoint order. */
+  mounted: MountedWeapon[] = [];
+  /** Guided-missile lock on another mech. */
+  readonly lock: LockState<MechEntity> = createLock();
   meleeCooldown = 0;
   /** Multiplier on damage this mech deals. */
   damageScale: number;
@@ -69,7 +79,7 @@ export class MechEntity {
     this.damageScale = spawn.damageScale ?? 1;
     this.state = createMechState(spawn.frame, spawn.yaw);
     this.baseArmorScale = spawn.armorScale ?? 1;
-    this.visual = new MechVisual(scene, spawn.name, FACTIONS[spawn.faction].colors);
+    this.visual = new MechVisual(scene, spawn.name, FACTIONS[spawn.faction].colors, spawn.frame);
     this.applyLoadout(spawn.loadout);
 
     const half = spawn.frame.height / 2;
@@ -101,33 +111,44 @@ export class MechEntity {
 
   isDestroyed = (section: SectionId): boolean => this.health.sections[section].destroyed;
 
-  /** Fit a loadout. This rebuilds the mech's armor, so it also fully repairs it. */
+  /**
+   * Fit a loadout (anything this frame cannot mount is left off). This rebuilds the mech's
+   * armor, so it also fully repairs it.
+   */
   applyLoadout(loadout: Loadout): void {
-    this.loadout = { ...loadout };
-    const stats = loadoutStats(this.frame, loadout);
+    this.loadout = fitToFrame(this.frame, loadout);
+    const stats = loadoutStats(this.frame, this.loadout);
     this.loadMobility = stats.mobility;
     this.health = createHealth(this.frame, this.baseArmorScale * stats.armorScale);
     this.visual.setArmVisible("armL", true);
     this.visual.setArmVisible("armR", true);
-    for (const side of ARM_SIDES) {
-      const id = loadout[side];
-      const def: WeaponDef | null = id ? WEAPONS[id] : null;
-      this.weapons[side] = def ? { def, cooldown: 0 } : null;
-      this.visual.setWeapon(side, def ? def.shape : null);
+    this.mounted = [];
+    for (const id of HARDPOINT_IDS) {
+      const hardpoint = this.frame.hardpoints.find((h) => h.id === id);
+      const weaponId = this.loadout.weapons[id];
+      const mount: MountedWeapon | null = hardpoint && weaponId ? { def: WEAPONS[weaponId], hardpoint, cooldown: 0, beamTime: 0 } : null;
+      this.weapons[id] = mount;
+      if (mount) this.mounted.push(mount);
+      if (hardpoint) this.visual.setWeapon(id, mount ? mount.def.shape : null);
     }
   }
 
+  /** True if the weapon can still fire: the part of the mech that carries it is intact. */
+  weaponWorks(weapon: MountedWeapon): boolean {
+    return !this.isDestroyed(weapon.hardpoint.section);
+  }
+
   /**
-   * Where shots leave a weapon. Computed from the torso pose rather than read from the
+   * Where shots leave a hardpoint. Computed from the torso pose rather than read from the
    * visual, so combat gives the same result whether or not the mech is being drawn.
    */
-  muzzle(side: ArmSide): Vector3 {
-    const k = this.frame.height / 4.6;
-    const lx = (side === "armL" ? -1.5 : 1.5) * k;
-    const lz = 2.6 * k;
+  muzzle(hardpoint: HardpointDef): Vector3 {
+    const k = this.frame.height / REFERENCE_HEIGHT;
+    const lx = hardpoint.muzzle[0] * k * this.frame.look.bulk;
+    const lz = hardpoint.muzzle[2] * k;
     const sin = Math.sin(this.state.torsoYaw);
     const cos = Math.cos(this.state.torsoYaw);
-    return new Vector3(this.feet.x + lx * cos + lz * sin, this.feet.y + 3.05 * k, this.feet.z - lx * sin + lz * cos);
+    return new Vector3(this.feet.x + lx * cos + lz * sin, this.feet.y + hardpoint.muzzle[1] * k, this.feet.z - lx * sin + lz * cos);
   }
 
   teleport(feet: Vec3, yaw: number): void {
@@ -146,6 +167,9 @@ export class MechEntity {
     this.state.energy = this.frame.energyMax;
     this.state.heat = 0;
     this.state.overheated = false;
+    this.state.boostCharges = this.frame.boostCharges ?? 1;
+    this.state.boostCooldown = 0;
+    clearLock(this.lock);
     this.visual.setArmVisible("armL", true);
     this.visual.setArmVisible("armR", true);
     this.visual.setVisible(true);
@@ -155,10 +179,7 @@ export class MechEntity {
     const s = this.state;
     s.mobility = mobilityFor(this.health) * this.loadMobility;
     this.meleeCooldown = Math.max(0, this.meleeCooldown - dt);
-    for (const side of ARM_SIDES) {
-      const w = this.weapons[side];
-      if (w) w.cooldown = Math.max(0, w.cooldown - dt);
-    }
+    for (const w of this.mounted) w.cooldown = Math.max(0, w.cooldown - dt);
 
     this.prevStride = s.strideDistance;
     const support = this.controller.checkSupport(dt, DOWN);
@@ -205,6 +226,7 @@ export class MechEntity {
         walkSpeed: this.frame.walkSpeed,
         grounded: s.grounded,
         thrust: s.boostTime > 0 ? 1 : s.jetting ? 0.7 : 0,
+        braced: s.braced,
       },
       frameDt,
     );

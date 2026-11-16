@@ -1,5 +1,6 @@
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { ColorScheme } from "../data/factions";
+import type { FrameDef, HardpointId } from "../data/frames";
 import type { PartVisual } from "./parts/PartVisual";
 import {
   getPartMaterials,
@@ -31,7 +32,12 @@ export interface MechAnimInput {
   walkSpeed: number;
   grounded: boolean;
   thrust: number;
+  /** True while the frame is dug into its brace stance. */
+  braced: boolean;
 }
+
+/** Height of the model the parts are built at; frames of other heights are scaled from it. */
+const MODEL_HEIGHT = 4.6;
 
 /**
  * Assembles a mech from PartVisuals and animates it procedurally. It only talks to
@@ -49,54 +55,75 @@ export class MechVisual {
   private readonly head: PartVisual;
   private readonly backpack: PartVisual;
   private readonly arms: Record<ArmSide, PartVisual>;
-  private readonly weapons: Partial<Record<ArmSide, PartVisual>> = {};
+  /** Shoulder weapons sit on pivots that pitch with the aim. */
+  private readonly shoulderPivots: Partial<Record<HardpointId, TransformNode>> = {};
+  private readonly weapons: Partial<Record<HardpointId, PartVisual>> = {};
   private readonly recoil: Record<ArmSide, number> = { armL: 0, armR: 0 };
   private airborne = 0;
+  private crouch = 0;
 
   constructor(
     private readonly scene: Scene,
     name: string,
     colors: ColorScheme,
+    frame: FrameDef,
   ) {
+    const look = frame.look;
     this.mats = getPartMaterials(scene, colors);
     this.root = new TransformNode(name, scene);
+    this.root.scaling.setAll(frame.height / MODEL_HEIGHT);
 
     this.markerNode = new TransformNode("marker", scene);
     this.markerNode.parent = this.root;
     this.markerNode.position.y = 6;
 
-    this.legs = new ProceduralLegs(scene, this.mats);
+    this.legs = new ProceduralLegs(scene, this.mats, look.hipHeight, look.bulk);
     this.legs.root.parent = this.root;
 
     this.torsoPivot = new TransformNode("torsoPivot", scene);
     this.torsoPivot.parent = this.legs.attachment("hip");
 
-    this.torso = new ProceduralTorso(scene, this.mats);
+    this.torso = new ProceduralTorso(
+      scene,
+      this.mats,
+      look.bulk,
+      frame.hardpoints.some((h) => h.mount === "shoulder"),
+    );
     this.torso.root.parent = this.torsoPivot;
 
-    this.head = new ProceduralHead(scene, this.mats);
+    this.head = new ProceduralHead(scene, this.mats, look.head);
     this.head.root.parent = this.torso.attachment("neck");
 
-    this.backpack = new ProceduralBackpack(scene, this.mats);
+    this.backpack = new ProceduralBackpack(scene, this.mats, look.bulk);
     this.backpack.root.parent = this.torso.attachment("back");
 
     this.arms = {
-      armL: new ProceduralArm(scene, this.mats, -1),
-      armR: new ProceduralArm(scene, this.mats, 1),
+      armL: new ProceduralArm(scene, this.mats, -1, look.bulk),
+      armR: new ProceduralArm(scene, this.mats, 1, look.bulk),
     };
     this.arms.armL.root.parent = this.torso.attachment("shoulder_l");
     this.arms.armR.root.parent = this.torso.attachment("shoulder_r");
   }
 
-  /** Fit (or remove, with null) the weapon model held by one arm. */
-  setWeapon(side: ArmSide, shape: WeaponShape | null): void {
-    this.weapons[side]?.dispose();
-    delete this.weapons[side];
-    if (shape) {
-      const weapon = new ProceduralWeapon(this.scene, this.mats, shape);
-      weapon.root.parent = this.arms[side].attachment("hand");
-      this.weapons[side] = weapon;
+  /** Fit (or remove, with null) the weapon model on one hardpoint. */
+  setWeapon(hardpoint: HardpointId, shape: WeaponShape | null): void {
+    this.weapons[hardpoint]?.dispose();
+    delete this.weapons[hardpoint];
+    this.shoulderPivots[hardpoint]?.dispose();
+    delete this.shoulderPivots[hardpoint];
+    if (!shape) return;
+    const weapon = new ProceduralWeapon(this.scene, this.mats, shape);
+    if (hardpoint === "armL" || hardpoint === "armR") {
+      weapon.root.parent = this.arms[hardpoint].attachment("hand");
+    } else {
+      const pivot = new TransformNode("shoulderPivot", this.scene);
+      pivot.parent = this.torso.attachment(hardpoint === "shoulderL" ? "mount_l" : "mount_r") ?? this.torso.root;
+      weapon.root.parent = pivot;
+      // Carried further back than a hand-held weapon, so it balances on its pedestal.
+      weapon.root.position.z = -0.5;
+      this.shoulderPivots[hardpoint] = pivot;
     }
+    this.weapons[hardpoint] = weapon;
   }
 
   /** Show or hide an arm, used when the section is destroyed. */
@@ -104,14 +131,9 @@ export class MechVisual {
     this.arms[side].root.setEnabled(visible);
   }
 
-  kickRecoil(side: ArmSide): void {
-    this.recoil[side] = 1;
-  }
-
-  /** World position of a weapon's muzzle, falling back to the hand, then the shoulder. */
-  muzzlePosition(side: ArmSide): Vector3 {
-    const node = this.weapons[side]?.attachment("muzzle") ?? this.arms[side].attachment("hand") ?? this.arms[side].root;
-    return worldPositionOf(node);
+  /** Kick the arm that fired. Shoulder mounts are braced against the torso and do not move. */
+  kickRecoil(hardpoint: HardpointId): void {
+    if (hardpoint === "armL" || hardpoint === "armR") this.recoil[hardpoint] = 1;
   }
 
   /** Eye point for the cockpit camera. */
@@ -130,7 +152,9 @@ export class MechVisual {
 
     const stride = input.grounded ? Math.min(1, input.speed / input.walkSpeed) : 0;
     this.airborne += ((input.grounded ? 0 : 1) - this.airborne) * Math.min(1, dt * 8);
-    this.legs.setPose({ walkPhase: input.walkPhase, stride, airborne: this.airborne });
+    this.crouch += ((input.braced ? 1 : 0) - this.crouch) * Math.min(1, dt * 7);
+    this.legs.setPose({ walkPhase: input.walkPhase, stride, airborne: this.airborne, crouch: this.crouch });
+    for (const pivot of Object.values(this.shoulderPivots)) pivot.rotation.x = -input.torsoPitch;
 
     for (const side of ["armL", "armR"] as const) {
       this.recoil[side] = Math.max(0, this.recoil[side] - dt * 6);

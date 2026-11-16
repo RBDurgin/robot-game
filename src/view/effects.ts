@@ -98,6 +98,16 @@ export class Effects {
     mesh.lookAt(to);
   }
 
+  /** One step of a continuous beam: a thick tracer that lasts just long enough to be redrawn. */
+  beam(from: Vector3, to: Vector3, hex: number): void {
+    const length = Vector3.Distance(from, to);
+    if (length < 0.5) return;
+    const mesh = this.spawn("tracer", 0.05, 1, hex);
+    mesh.position.copyFrom(from).addInPlace(to).scaleInPlace(0.5);
+    mesh.scaling.set(2.6, 2.6, length);
+    mesh.lookAt(to);
+  }
+
   spark(at: Vector3, size: number, hex: number): void {
     this.spawn("spark", 0.16, size, hex).position.copyFrom(at);
   }

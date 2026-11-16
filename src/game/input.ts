@@ -7,7 +7,8 @@ const MAX_LOOK_PITCH = 1.25;
  * Keyboard and mouse state for the player.
  *
  *   WASD move · Shift sprint · Space jump / jump jets · Q boost dash
- *   Left mouse primary · Right mouse secondary · F melee · V switch view
+ *   Left mouse primary · Right mouse secondary · E or middle mouse shoulder weapons
+ *   F melee · V switch view
  */
 export class PlayerInput {
   yaw = 0;
@@ -44,6 +45,8 @@ export class PlayerInput {
         if (this.enabled) this.lockPointer();
         return;
       }
+      // Middle mouse fires shoulder weapons; stop the browser's scroll mode.
+      if (e.button === 1) e.preventDefault();
       this.buttons.add(e.button);
     });
     window.addEventListener("mouseup", (e) => this.buttons.delete(e.button));
@@ -118,6 +121,7 @@ export class PlayerInput {
       jump: on && this.keys.has("Space"),
       firePrimary: on && this.buttons.has(0),
       fireSecondary: on && this.buttons.has(2),
+      fireTertiary: on && (this.buttons.has(1) || this.keys.has("KeyE")),
       melee: on && this.keys.has("KeyF"),
     };
   }

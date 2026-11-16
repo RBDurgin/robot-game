@@ -21,8 +21,13 @@ export interface Intent {
   jump: boolean;
   firePrimary: boolean;
   fireSecondary: boolean;
+  /** Shoulder mounts, on frames that have them. */
+  fireTertiary: boolean;
   melee: boolean;
 }
+
+/** The Intent field that pulls each trigger. */
+export const TRIGGER_FIELD = { primary: "firePrimary", secondary: "fireSecondary", tertiary: "fireTertiary" } as const;
 
 export function idleIntent(aimYaw = 0): Intent {
   return {
@@ -36,6 +41,7 @@ export function idleIntent(aimYaw = 0): Intent {
     jump: false,
     firePrimary: false,
     fireSecondary: false,
+    fireTertiary: false,
     melee: false,
   };
 }

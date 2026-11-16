@@ -7,7 +7,7 @@ interface HitBox {
   max: Vec3;
 }
 
-/** Hit volumes for a 4.6 m frame, in mech-local space (feet at origin, +Z forward, -X is the left arm). */
+/** Hit volumes for a 4.6 m frame of medium build, in mech-local space (feet at origin, +Z forward, -X is the left arm). */
 const REFERENCE_HEIGHT = 4.6;
 const REFERENCE_BOXES: HitBox[] = [
   { section: "legs", min: { x: -1.0, y: 0, z: -0.8 }, max: { x: 1.0, y: 2.4, z: 0.8 } },
@@ -21,11 +21,13 @@ const boxCache = new Map<string, HitBox[]>();
 function boxesFor(frame: FrameDef): HitBox[] {
   let boxes = boxCache.get(frame.id);
   if (!boxes) {
+    // Volumes scale with the frame's height, and sideways with its bulk as well.
     const k = frame.height / REFERENCE_HEIGHT;
+    const w = k * frame.look.bulk;
     boxes = REFERENCE_BOXES.map((b) => ({
       section: b.section,
-      min: { x: b.min.x * k, y: b.min.y * k, z: b.min.z * k },
-      max: { x: b.max.x * k, y: b.max.y * k, z: b.max.z * k },
+      min: { x: b.min.x * w, y: b.min.y * k, z: b.min.z * k },
+      max: { x: b.max.x * w, y: b.max.y * k, z: b.max.z * k },
     }));
     boxCache.set(frame.id, boxes);
   }

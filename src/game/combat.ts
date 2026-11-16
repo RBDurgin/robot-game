@@ -1,15 +1,15 @@
 import { Mesh, Scene, Vector3 } from "@babylonjs/core";
 import { areHostile } from "../data/factions";
 import type { SectionId } from "../data/frames";
-import { MELEE, type WeaponDef } from "../data/weapons";
+import { MELEE, WEAPON_RULES, type WeaponDef } from "../data/weapons";
 import { applyDamage, type DamageResult } from "../sim/damage";
 import { raycastMech, splashSection } from "../sim/hit";
-import type { Intent } from "../sim/intent";
-import { angleDiff, forwardFromYawPitch, yawFromDir } from "../sim/math";
+import { TRIGGER_FIELD, type Intent } from "../sim/intent";
+import { angleDiff, forwardFromYawPitch, yawFromDir, type Vec3 } from "../sim/math";
 import { addHeat } from "../sim/mech";
+import { angleBetween, beamPulses, clearLock, pelletDirections, spreadDirection, steerMissile, stepLock } from "../sim/weapons";
 import type { Effects } from "../view/effects";
-import type { ArmSide } from "../view/mechVisual";
-import type { MechEntity } from "./mechEntity";
+import type { MechEntity, MountedWeapon } from "./mechEntity";
 import { raycastWorld } from "./physics";
 
 export interface TraceHit {
@@ -33,6 +33,8 @@ interface Projectile {
   shooter: MechEntity;
   travelled: number;
   mesh: Mesh;
+  /** Guided missiles: the mech being chased, if the shooter had a lock. */
+  target: MechEntity | null;
 }
 
 /** Weapons fire, projectiles, melee and damage for every mech. */
@@ -68,60 +70,131 @@ export class Combat {
 
   /** Handle one mech's trigger pulls for this step. Call after the mech has moved. */
   stepMech(mech: MechEntity, intent: Intent): void {
-    if (!mech.alive || mech.state.overheated) return;
-    if (intent.firePrimary) this.fireWeapon(mech, "armR", intent);
-    if (intent.fireSecondary) this.fireWeapon(mech, "armL", intent);
-    if (intent.melee) this.melee(mech);
+    if (!mech.alive) return;
+    this.updateLock(mech, intent);
+    for (const weapon of mech.mounted) {
+      const held = intent[TRIGGER_FIELD[weapon.hardpoint.trigger]] && !mech.state.overheated && mech.weaponWorks(weapon);
+      if (weapon.def.kind === "beam") {
+        if (held) this.fireBeam(mech, weapon, intent);
+        else weapon.beamTime = 0;
+      } else if (held && weapon.cooldown <= 0) {
+        this.fireWeapon(mech, weapon, intent);
+      }
+    }
+    if (intent.melee && !mech.state.overheated) this.melee(mech);
   }
 
-  private fireWeapon(mech: MechEntity, side: ArmSide, intent: Intent): void {
-    const weapon = mech.weapons[side];
-    if (!weapon || weapon.cooldown > 0 || mech.isDestroyed(side) || mech.state.overheated) return;
-    weapon.cooldown = weapon.def.cooldown;
-    addHeat(mech.state, mech.frame, weapon.def.heat);
-    mech.visual.kickRecoil(side);
+  /**
+   * Guided weapons lock onto the hostile nearest the crosshair, if it is inside the lock cone,
+   * in range and in plain sight. The lock builds while the crosshair stays on it.
+   */
+  private updateLock(mech: MechEntity, intent: Intent): void {
+    const seeker = mech.mounted.find((w) => w.def.turnRate !== undefined && mech.weaponWorks(w));
+    if (!seeker) {
+      clearLock(mech.lock);
+      return;
+    }
+    const eye = mech.center;
+    const aim = this.aimDirection(eye, intent);
+    let candidate: MechEntity | null = null;
+    let best = WEAPON_RULES.lockCone;
+    for (const other of this.mechs()) {
+      if (other === mech || !other.alive || !areHostile(other.faction, mech.faction)) continue;
+      const to = other.center.subtract(eye);
+      const dist = to.length();
+      if (dist > seeker.def.range || dist < 1) continue;
+      const off = angleBetween(aim, to.scaleInPlace(1 / dist));
+      if (off < best) {
+        best = off;
+        candidate = other;
+      }
+    }
+    if (candidate && raycastWorld(this.scene, eye, candidate.center)) candidate = null;
+    if (mech.lock.target && !mech.lock.target.alive) clearLock(mech.lock);
+    stepLock(mech.lock, candidate, 1 / 60, WEAPON_RULES.lockGrace);
+  }
 
+  /** The mech `mech` has a full lock on, or null. */
+  lockedTarget(mech: MechEntity): MechEntity | null {
+    const seeker = mech.mounted.find((w) => w.def.turnRate !== undefined);
+    return seeker && mech.lock.target && mech.lock.time >= (seeker.def.lockTime ?? 0) ? mech.lock.target : null;
+  }
+
+  /** Weapon spread for this mech right now: a braced frame shoots straighter. */
+  private spreadFor(mech: MechEntity, def: WeaponDef): number {
+    return def.spread * (mech.state.braced ? (mech.frame.brace?.spreadScale ?? 1) : 1);
+  }
+
+  private fireWeapon(mech: MechEntity, weapon: MountedWeapon, intent: Intent): void {
     const def = weapon.def;
-    const muzzle = mech.muzzle(side);
-    const dir = this.shotDirection(muzzle, intent, def.spread);
+    weapon.cooldown = def.cooldown;
+    addHeat(mech.state, mech.frame, def.heat);
+    mech.visual.kickRecoil(weapon.hardpoint.id);
+
+    const muzzle = mech.muzzle(weapon.hardpoint);
+    const aim = this.aimDirection(muzzle, intent);
+    const spread = this.spreadFor(mech, def);
     this.effects.spark(muzzle, 0.9, def.color);
     this.events.onFire(mech, def, muzzle);
 
     if (def.kind === "hitscan") {
-      const hit = this.trace(muzzle, dir, def.range, mech);
-      const end = hit ? hit.point : muzzle.add(dir.scale(def.range));
-      this.effects.tracer(muzzle, end, def.color);
-      if (hit) {
+      // Pellets that land on the same section are applied as one hit.
+      const hits = new Map<string, { mech: MechEntity; section: SectionId; count: number }>();
+      for (const d of pelletDirections(aim, spread, def.pellets ?? 1, this.rng)) {
+        const dir = new Vector3(d.x, d.y, d.z);
+        const hit = this.trace(muzzle, dir, def.range, mech);
+        const end = hit ? hit.point : muzzle.add(dir.scale(def.range));
+        this.effects.tracer(muzzle, end, def.color);
+        if (!hit) continue;
         this.effects.spark(hit.point, hit.mech ? 1.6 : 1.0, hit.mech ? 0xffffff : def.color);
-        if (hit.mech && hit.section) this.damage(hit.mech, hit.section, def.damage, mech);
+        if (hit.mech && hit.section) {
+          const key = `${hit.mech.name}/${hit.section}`;
+          const entry = hits.get(key) ?? { mech: hit.mech, section: hit.section, count: 0 };
+          entry.count++;
+          hits.set(key, entry);
+        }
       }
+      for (const h of hits.values()) this.damage(h.mech, h.section, def.damage * h.count, mech);
     } else {
+      const d = spreadDirection(aim, spread, this.rng);
+      const dir = new Vector3(d.x, d.y, d.z);
       const mesh = this.effects.acquireShell(def.color);
       mesh.position.copyFrom(muzzle);
       mesh.lookAt(muzzle.add(dir));
-      this.projectiles.push({ pos: muzzle.clone(), vel: dir.scale(def.projectileSpeed ?? 80), def, shooter: mech, travelled: 0, mesh });
+      const target = def.turnRate !== undefined ? this.lockedTarget(mech) : null;
+      this.projectiles.push({ pos: muzzle.clone(), vel: dir.scale(def.projectileSpeed ?? 80), def, shooter: mech, travelled: 0, mesh, target });
     }
   }
 
-  /** Direction from the muzzle to the pilot's aim point, with weapon spread applied. */
-  private shotDirection(muzzle: Vector3, intent: Intent, spread: number): Vector3 {
-    let dir: Vector3 | null = null;
+  /** A beam is drawn and heats the mech every step it is held; its damage lands in pulses. */
+  private fireBeam(mech: MechEntity, weapon: MountedWeapon, intent: Intent): void {
+    const def = weapon.def;
+    const dt = 1 / 60;
+    addHeat(mech.state, mech.frame, def.heat * dt);
+    const muzzle = mech.muzzle(weapon.hardpoint);
+    const aim = this.aimDirection(muzzle, intent);
+    const dir = new Vector3(aim.x, aim.y, aim.z);
+    const hit = this.trace(muzzle, dir, def.range, mech);
+    const end = hit ? hit.point : muzzle.add(dir.scale(def.range));
+    this.effects.beam(muzzle, end, def.color);
+    if (hit) this.effects.spark(hit.point, 0.8, def.color);
+    const pulses = beamPulses(weapon, dt, WEAPON_RULES.beamPulse);
+    if (pulses === 0) return;
+    this.events.onFire(mech, def, muzzle);
+    if (hit?.mech && hit.section) this.damage(hit.mech, hit.section, def.damage * WEAPON_RULES.beamPulse * pulses, mech);
+  }
+
+  /** Unit direction from `from` to the pilot's aim point (or straight ahead if there is none). */
+  private aimDirection(from: Vector3, intent: Intent): Vec3 {
     if (intent.aimPoint) {
-      const to = new Vector3(intent.aimPoint.x - muzzle.x, intent.aimPoint.y - muzzle.y, intent.aimPoint.z - muzzle.z);
+      const x = intent.aimPoint.x - from.x;
+      const y = intent.aimPoint.y - from.y;
+      const z = intent.aimPoint.z - from.z;
+      const l = Math.hypot(x, y, z);
       // Very close aim points would make the two arms cross; fall back to firing straight.
-      if (to.length() > 4) dir = to.normalize();
+      if (l > 4) return { x: x / l, y: y / l, z: z / l };
     }
-    if (!dir) {
-      const f = forwardFromYawPitch(intent.aimYaw, intent.aimPitch);
-      dir = new Vector3(f.x, f.y, f.z);
-    }
-    if (spread > 0) {
-      dir.x += (this.rng() * 2 - 1) * spread;
-      dir.y += (this.rng() * 2 - 1) * spread;
-      dir.z += (this.rng() * 2 - 1) * spread;
-      dir.normalize();
-    }
-    return dir;
+    return forwardFromYawPitch(intent.aimYaw, intent.aimPitch);
   }
 
   private melee(mech: MechEntity): void {
@@ -143,7 +216,9 @@ export class Combat {
 
   damage(victim: MechEntity, section: SectionId, amount: number, attacker: MechEntity): void {
     if (!victim.alive) return;
-    const dealt = amount * attacker.damageScale;
+    // A braced frame shrugs off part of every hit.
+    const brace = victim.state.braced ? (victim.frame.brace?.damageTaken ?? 1) : 1;
+    const dealt = amount * attacker.damageScale * brace;
     const result = applyDamage(victim.health, section, dealt);
     for (const destroyed of result.destroyed) {
       if (destroyed === "armL" || destroyed === "armR") victim.visual.setArmVisible(destroyed, false);
@@ -175,6 +250,11 @@ export class Combat {
   step(dt: number): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i]!;
+      if (p.target?.alive && p.def.turnRate !== undefined) {
+        const v = steerMissile(p.vel, p.pos, p.target.center, p.def.turnRate, dt);
+        p.vel.set(v.x, v.y, v.z);
+        p.mesh.lookAt(p.pos.add(p.vel));
+      }
       const speed = p.vel.length();
       const stepLen = speed * dt;
       const dir = p.vel.scale(1 / speed);

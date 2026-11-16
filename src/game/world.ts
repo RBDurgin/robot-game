@@ -2,12 +2,15 @@ import { Color3, Color4, DirectionalLight, Engine, HemisphericLight, Scene, Vect
 import { ENEMY_TUNING, SLICE_SQUADS } from "../data/encounters";
 import { FACTIONS } from "../data/factions";
 import { FEEL } from "../data/feel";
-import { FRAMES, SECTION_IDS, type SectionId } from "../data/frames";
+import { FRAMES, SECTION_IDS, type FrameId, type SectionId } from "../data/frames";
 import { ENEMY_LOADOUTS, type Loadout } from "../data/loadouts";
+import { WEAPONS, type WeaponId } from "../data/weapons";
 import { SLICE_ZONE, type ZoneDef } from "../data/zone";
+import { AI_ROLES } from "../sim/ai/brain";
 import { healthFraction, sectionFraction } from "../sim/damage";
 import type { Intent } from "../sim/intent";
 import { addItem, itemName } from "../sim/loadout";
+import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
 import { rollLoot } from "../sim/loot";
 import { makeRng, type Vec3 } from "../sim/math";
@@ -49,6 +52,10 @@ export class World {
   readonly sfx = new Sfx();
   readonly rng: () => number;
   readonly save: SaveData;
+  /** The player's mech. Replaced by a new one when the player changes frame in the hangar. */
+  player: MechEntity;
+  /** Called after the player's mech is rebuilt on a different frame. */
+  onPlayerFrameChanged: (() => void) | null = null;
   mode: GameMode = "paused";
   phase: MissionPhase = "assault";
   tick = 0;
@@ -80,10 +87,11 @@ export class World {
     readonly cameraRig: CameraRig,
     readonly hud: Hud,
     readonly screens: Screens,
-    readonly player: MechEntity,
+    player: MechEntity,
     save: SaveData,
   ) {
     this.save = save;
+    this.player = player;
     this.rng = makeRng(zone.seed);
     this.effects = new Effects(scene);
     this.salvage = new SalvageField(scene);
@@ -113,7 +121,8 @@ export class World {
       onKill: (victim, attacker) => this.onKill(victim, attacker),
       onFire: (shooter, weapon, at) => {
         const d = shooter === this.player ? 0 : Vector3.Distance(at, this.player.feet);
-        this.sfx.shot(weapon.kind, weapon.damage > 30, d);
+        const perShot = weapon.damage * (weapon.pellets ?? 1);
+        this.sfx.shot(weapon.kind === "projectile" ? "projectile" : "hitscan", weapon.kind !== "beam" && perShot > 30, d);
       },
       onExplosion: (at, radius) => {
         const d = Vector3.Distance(at, this.player.center);
@@ -167,12 +176,18 @@ export class World {
     buildStructures(scene, zone);
 
     const save = loadSave();
+    // `?arsenal` in the URL stocks the hangar with two of every weapon and plating, for playtests.
+    if (new URLSearchParams(location.search).has("arsenal")) {
+      for (const id of [...Object.keys(WEAPONS), "lightPlating", "standardPlating", "heavyPlating"] as (WeaponId | "lightPlating")[]) {
+        save.inventory[id] = Math.max(save.inventory[id] ?? 0, 2);
+      }
+    }
     const base = zone.playerBase;
     // Face the enemy outpost on spawn.
     const spawnYaw = Math.atan2(zone.enemyOutpost.x - base.x, zone.enemyOutpost.z - base.z);
     const player = new MechEntity(scene, {
       name: "player",
-      frame: FRAMES.medium,
+      frame: FRAMES[save.frame],
       faction: "drifters",
       position: World.groundPoint(zone, base.x, base.z, 0.6),
       yaw: spawnYaw,
@@ -255,22 +270,48 @@ export class World {
     this.sfx.setThrust(0);
     this.sfx.ui();
     this.screens.showHangar({
-      frame: this.player.frame,
+      frame: this.save.frame,
       loadout: this.save.loadout,
       inventory: this.save.inventory,
       scrap: this.save.scrap,
-      onDeploy: (loadout) => this.deploy(loadout),
+      onDeploy: (frame, loadout) => this.deploy(frame, loadout),
     });
   }
 
-  /** Fit a loadout chosen in the hangar, repair, and return to play. */
-  deploy(loadout: Loadout): void {
+  /** Fit the frame and loadout chosen in the hangar, repair, and return to play. */
+  deploy(frame: FrameId, loadout: Loadout): void {
+    const changed = frame !== this.save.frame;
+    this.save.frame = frame;
     this.save.loadout = loadout;
     writeSave(this.save);
-    this.player.applyLoadout(loadout);
-    this.player.restore();
-    this.notify("Suit refitted and repaired.");
+    if (changed) {
+      this.rebuildPlayer(frame);
+    } else {
+      this.player.applyLoadout(loadout);
+      this.player.restore();
+    }
+    this.notify(changed ? `${this.player.frame.name} frame ready.` : "Suit refitted and repaired.");
     this.resume();
+  }
+
+  /** Swap the player's mech for one built on another frame, standing where the old one stood. */
+  private rebuildPlayer(frame: FrameId): void {
+    const old = this.player;
+    const at = { x: old.feet.x, y: old.feet.y + 0.3, z: old.feet.z };
+    const yaw = old.state.torsoYaw;
+    old.dispose();
+    this.player = new MechEntity(this.scene, {
+      name: "player",
+      frame: FRAMES[frame],
+      faction: "drifters",
+      position: at,
+      yaw,
+      loadout: this.save.loadout,
+    });
+    this.mechs[this.mechs.indexOf(old)] = this.player;
+    for (const mech of this.mechs) if (mech.lock.target === old) mech.lock.target = null;
+    void this.player.visual.prewarm();
+    this.onPlayerFrameChanged?.();
   }
 
   private completeMission(): void {
@@ -293,20 +334,20 @@ export class World {
     const home = World.groundPoint(this.zone, post.x, post.z - 20);
     for (const squad of SLICE_SQUADS) {
       const patrol = squad.patrol.map(([dx, dz]) => World.groundPoint(this.zone, post.x + dx, post.z + dz));
-      squad.members.forEach((loadoutId, i) => {
+      squad.members.forEach((member, i) => {
         const startIndex = Math.floor((i * patrol.length) / squad.members.length);
         const start = patrol[startIndex]!;
         const mech = new MechEntity(this.scene, {
-          name: `${FACTIONS[squad.faction].name} ${loadoutId}`,
-          frame: FRAMES[squad.frame],
+          name: `${FACTIONS[squad.faction].name} ${member.loadout}`,
+          frame: FRAMES[member.frame],
           faction: squad.faction,
           position: { x: start.x, y: start.y + 0.6, z: start.z },
           yaw: this.rng() * Math.PI * 2,
-          loadout: ENEMY_LOADOUTS[loadoutId],
+          loadout: ENEMY_LOADOUTS[member.loadout],
           armorScale: ENEMY_TUNING.armorScale,
           damageScale: ENEMY_TUNING.damageScale,
         });
-        mech.brain = new AiController(patrol, home, startIndex + 1, squad.id);
+        mech.brain = new AiController(patrol, home, startIndex + 1, squad.id, AI_ROLES[member.role]);
         this.mechs.push(mech);
         this.hud.addMarker(mech.visual.markerNode);
       });
@@ -513,13 +554,27 @@ export class World {
     return blips;
   }
 
+  /** True if a living enemy has a full missile lock on the player. */
+  private get lockedOn(): boolean {
+    return this.player.alive && this.mechs.some((m) => m !== this.player && m.alive && this.combat.lockedTarget(m) === this.player);
+  }
+
   private infoText(): string {
-    const w = this.player.weapons;
-    const lines = [
-      `R  ${w.armR ? w.armR.def.name : "empty"}${this.player.isDestroyed("armR") ? " (destroyed)" : ""}`,
-      `L  ${w.armL ? w.armL.def.name : "empty"}${this.player.isDestroyed("armL") ? " (destroyed)" : ""}`,
-      `Scrap ${this.save.scrap}`,
-    ];
+    const p = this.player;
+    const tags = { armR: "R ", armL: "L ", shoulderR: "SR", shoulderL: "SL" };
+    const lines = p.frame.hardpoints.map((h) => {
+      const w = p.weapons[h.id];
+      return `${tags[h.id]} ${w ? w.def.name : "empty"}${w && !p.weaponWorks(w) ? " (destroyed)" : ""}`;
+    });
+    const seeker = p.mounted.find((w) => w.def.lockTime !== undefined && p.weaponWorks(w));
+    if (seeker && p.lock.target) {
+      const progress = lockProgress(p.lock, seeker.def.lockTime ?? 0);
+      lines.push(progress >= 1 ? "SEEKER LOCKED" : `Seeker locking ${Math.round(progress * 100)}%`);
+    }
+    const charges = p.frame.boostCharges ?? 1;
+    if (charges > 1) lines.push(`Dash ${"●".repeat(p.state.boostCharges)}${"○".repeat(charges - p.state.boostCharges)}`);
+    if (p.state.braced) lines.push("BRACED");
+    lines.push(`Scrap ${this.save.scrap}`);
     if (this.atBase && this.player.alive) lines.push("Press H: hangar (refit, repair)");
     return lines.join("\n");
   }
@@ -562,7 +617,8 @@ export class World {
       target: this.aimedMech ? { name: this.aimedMech.name, health: healthFraction(this.aimedMech.health) } : null,
       objective,
       // Without the mouse captured there is no looking around; say how to get it back.
-      message: this.message?.text ?? (this.input.needsPointer ? "Click the view to capture the mouse" : null),
+      message:
+        this.message?.text ?? (this.lockedOn ? "MISSILE LOCK: break line of sight or dash" : this.input.needsPointer ? "Click the view to capture the mouse" : null),
       heading: this.input.yaw,
       waypoint:
         this.phase === "done"

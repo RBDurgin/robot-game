@@ -1,9 +1,9 @@
-import type { FrameDef } from "../data/frames";
+import { FRAME_IDS, FRAMES, type FrameDef, type FrameId, type Trigger } from "../data/frames";
 import type { Loadout } from "../data/loadouts";
 import { PLATING, type PlatingId } from "../data/parts";
 import { WEAPONS, type WeaponId } from "../data/weapons";
 import type { Settings } from "../game/save";
-import { isWeaponId, itemName, loadoutProblems, loadoutStats, type Inventory, type ItemId } from "../sim/loadout";
+import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type Inventory, type ItemId } from "../sim/loadout";
 
 type Child = Node | string;
 
@@ -28,6 +28,7 @@ const CONTROLS: [string, string][] = [
   ["Space", "Jump, hold for jump jets"],
   ["Q", "Boost dash"],
   ["Left / Right mouse", "Fire right / left arm weapon"],
+  ["E / Middle mouse", "Fire shoulder weapons (heavy frame)"],
   ["F", "Melee strike"],
   ["V", "Switch third-person / cockpit view"],
   ["H", "Hangar (at base)"],
@@ -44,11 +45,45 @@ export interface PauseOptions {
 }
 
 export interface HangarOptions {
-  frame: FrameDef;
+  /** The frame the suit is built on now. */
+  frame: FrameId;
   loadout: Loadout;
   inventory: Inventory;
   scrap: number;
-  onDeploy(loadout: Loadout): void;
+  onDeploy(frame: FrameId, loadout: Loadout): void;
+}
+
+const FIRE_KEYS: Record<Trigger, string> = { primary: "LMB", secondary: "RMB", tertiary: "E" };
+
+/** One line of numbers for a weapon, in the units that suit its kind. */
+function weaponLine(id: WeaponId | null): string {
+  if (!id) return "empty";
+  const w = WEAPONS[id];
+  if (w.kind === "beam") return `${w.name} · ${w.damage} dmg/s · ${w.heat} heat/s · ${w.range} m · ${w.mass} t`;
+  const damage = "pellets" in w ? `${w.pellets} x ${w.damage}` : String(w.damage);
+  return `${w.name} · ${damage} dmg · ${(1 / w.cooldown).toFixed(1)}/s · ${w.heat} heat · ${w.range} m · ${w.mass} t`;
+}
+
+/** The three frames side by side, with the chosen one picked out. */
+function frameTable(selected: FrameId): HTMLElement {
+  const frames = FRAME_IDS.map((id) => FRAMES[id] as FrameDef);
+  const armor = (f: FrameDef): number => Object.values(f.sections).reduce((sum, s) => sum + s.armor + s.structure, 0);
+  const rows: [string, (f: FrameDef) => string][] = [
+    ["Role", (f) => f.role.split(".")[0]!],
+    ["Speed", (f) => `${f.walkSpeed} / ${f.sprintSpeed} m/s`],
+    ["Armor", (f) => String(armor(f))],
+    ["Capacity", (f) => `${f.loadCapacity} t`],
+    ["Heat", (f) => `${f.heatCapacity} (-${f.heatDissipation}/s)`],
+    ["Dash", (f) => `${f.boostCharges ?? 1} x ${Math.round(f.boostSpeed * f.boostDuration)} m`],
+    ["Mounts", (f) => (f.hardpoints.some((h) => h.mount === "shoulder") ? "2 arms, 2 shoulders" : "2 arms")],
+    ["Ability", (f) => (f.brace ? `Brace: -${Math.round((1 - f.brace.damageTaken) * 100)}% damage` : (f.boostCharges ?? 1) > 1 ? "Double dash" : "None")],
+  ];
+  const cell = (tag: "th" | "td", text: string, f?: FrameDef): HTMLElement => el(tag, f?.id === selected ? "selected" : "", [text]);
+  const table = el("table", "frames", [
+    el("thead", "", [el("tr", "", [el("th"), ...frames.map((f) => cell("th", f.name, f))])]),
+    el("tbody", "", rows.map(([label, value]) => el("tr", "", [cell("th", label), ...frames.map((f) => cell("td", value(f), f))]))),
+  ]);
+  return table;
 }
 
 export interface MissionSummary {
@@ -136,71 +171,101 @@ export class Screens {
   }
 
   showHangar(opts: HangarOptions): void {
-    const loadout: Loadout = { ...opts.loadout };
-    const stats = el("div", "stats");
-    const problems = el("ul", "problems");
-    const deploy = button("Repair and deploy", () => opts.onDeploy({ ...loadout }));
+    let frameId = opts.frame;
+    let loadout: Loadout = fitToFrame(FRAMES[frameId], opts.loadout);
 
     const owned = (Object.entries(opts.inventory) as [ItemId, number][]).filter(([, n]) => n > 0);
     const weaponsOwned = owned.filter(([id]) => isWeaponId(id)).map(([id]) => id as WeaponId);
     const platingOwned = owned.filter(([id]) => !isWeaponId(id)).map(([id]) => id as PlatingId);
 
-    const refresh = (): void => {
-      const s = loadoutStats(opts.frame, loadout);
-      const weaponLine = (side: string, id: WeaponId | null): string => {
-        if (!id) return `${side}: empty`;
-        const w = WEAPONS[id];
-        return `${side}: ${w.name} · ${w.damage} dmg · ${(1 / w.cooldown).toFixed(1)}/s · ${w.heat} heat · ${w.mass} t`;
-      };
-      stats.replaceChildren(
-        el("div", s.overweight ? "bad" : "", [`Load ${s.mass.toFixed(1)} / ${s.capacity} t`]),
-        el("div", "", [`Speed ${Math.round(s.mobility * 100)}%`]),
-        el("div", "", [`Armor ${Math.round(s.armorScale * 100)}%`]),
-        el("div", "dim", [weaponLine("Right arm", loadout.armR)]),
-        el("div", "dim", [weaponLine("Left arm", loadout.armL)]),
-        el("div", "dim", [`Plating: ${PLATING[loadout.plating].description}`]),
-      );
-      const issues = loadoutProblems(opts.frame, loadout, opts.inventory);
-      problems.replaceChildren(...issues.map((p) => el("li", "", [p])));
-      deploy.disabled = issues.length > 0;
-    };
-
-    const slot = <T extends string>(label: string, options: T[], current: T | null, allowEmpty: boolean, set: (v: T | null) => void): HTMLElement => {
-      const select = el("select");
+    const select = <T extends string>(label: string, options: [T, string][], current: T | null, allowEmpty: boolean, set: (v: T | null) => void): HTMLElement => {
+      const input = el("select");
       if (allowEmpty) {
         const o = el("option", "", ["Empty"]);
         o.value = "";
         o.selected = current === null;
-        select.append(o);
+        input.append(o);
       }
-      for (const id of options) {
-        const o = el("option", "", [`${itemName(id as ItemId)} (x${opts.inventory[id as ItemId] ?? 0})`]);
+      for (const [id, text] of options) {
+        const o = el("option", "", [text]);
         o.value = id;
         o.selected = id === current;
-        select.append(o);
+        input.append(o);
       }
-      select.addEventListener("change", () => {
-        set(select.value === "" ? null : (select.value as T));
-        refresh();
-      });
-      return el("label", "row", [el("span", "", [label]), select]);
+      input.addEventListener("change", () => set(input.value === "" ? null : (input.value as T)));
+      return el("label", "row", [el("span", "", [label]), input]);
     };
+    const itemOption = <T extends ItemId>(id: T): [T, string] => [id, `${itemName(id)} (x${opts.inventory[id] ?? 0})`];
 
-    const inventory = el("ul", "inventory", owned.map(([id, n]) => el("li", "", [`${itemName(id)} x${n}`])));
+    // The panel is rebuilt when the frame changes, because the frame decides which mounts exist.
+    const render = (focusFrame: boolean): void => {
+      const frame: FrameDef = FRAMES[frameId];
+      const stats = el("div", "stats");
+      const problems = el("ul", "problems");
+      const deploy = button("Repair and deploy", () => opts.onDeploy(frameId, { weapons: { ...loadout.weapons }, plating: loadout.plating }));
 
-    const panel = el("div", "panel", [
-      el("h1", "", [`Hangar · ${opts.frame.name} frame`]),
-      slot("Right arm", weaponsOwned, loadout.armR, true, (v) => (loadout.armR = v)),
-      slot("Left arm", weaponsOwned, loadout.armL, true, (v) => (loadout.armL = v)),
-      slot("Plating", platingOwned, loadout.plating, false, (v) => (loadout.plating = v ?? loadout.plating)),
-      stats,
-      problems,
-      el("h2", "", [`Salvage store · ${opts.scrap} scrap`]),
-      inventory,
-      el("div", "actions", [deploy]),
-    ]);
-    refresh();
-    this.show(panel);
+      const refresh = (): void => {
+        const s = loadoutStats(frame, loadout);
+        stats.replaceChildren(
+          el("div", s.overweight ? "bad" : "", [`Load ${s.mass.toFixed(1)} / ${s.capacity} t`]),
+          el("div", "", [`Speed ${Math.round(s.mobility * 100)}%`]),
+          el("div", "", [`Armor ${Math.round(s.armorScale * 100)}%`]),
+          ...frame.hardpoints.map((h) => el("div", "dim", [`${h.name}: ${weaponLine(loadout.weapons[h.id] ?? null)}`])),
+          el("div", "dim", [`Plating: ${PLATING[loadout.plating].description}`]),
+        );
+        const issues = loadoutProblems(frame, loadout, opts.inventory);
+        problems.replaceChildren(...issues.map((p) => el("li", "", [p])));
+        deploy.disabled = issues.length > 0;
+      };
+
+      const frameSelect = select(
+        "Frame",
+        FRAME_IDS.map((id): [FrameId, string] => [id, `${FRAMES[id].name} (${FRAMES[id].weightClass})`]),
+        frameId,
+        false,
+        (v) => {
+          if (!v) return;
+          frameId = v;
+          loadout = fitToFrame(FRAMES[frameId], loadout);
+          render(true);
+        },
+      );
+
+      const slots = frame.hardpoints.map((h) =>
+        select(
+          `${h.name} · ${FIRE_KEYS[h.trigger]}`,
+          weaponsOwned.filter((id) => fitsMount(WEAPONS[id], h.mount)).map(itemOption),
+          loadout.weapons[h.id] ?? null,
+          true,
+          (v) => {
+            if (v) loadout.weapons[h.id] = v;
+            else delete loadout.weapons[h.id];
+            refresh();
+          },
+        ),
+      );
+
+      const panel = el("div", "panel wide", [
+        el("h1", "", [`Hangar · ${frame.name} frame`]),
+        frameSelect,
+        frameTable(frameId),
+        el("h2", "", ["Loadout"]),
+        ...slots,
+        select("Plating", platingOwned.map(itemOption), loadout.plating, false, (v) => {
+          loadout.plating = v ?? loadout.plating;
+          refresh();
+        }),
+        stats,
+        problems,
+        el("h2", "", [`Salvage store · ${opts.scrap} scrap`]),
+        el("ul", "inventory", owned.map(([id, n]) => el("li", "", [`${itemName(id)} x${n}`]))),
+        el("div", "actions", [deploy]),
+      ]);
+      refresh();
+      this.show(panel);
+      if (focusFrame) frameSelect.querySelector("select")?.focus({ preventScroll: true });
+    };
+    render(false);
   }
 
   showComplete(summary: MissionSummary, onReplay: () => void, onContinue: () => void): void {

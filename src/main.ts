@@ -126,6 +126,10 @@ async function boot(): Promise<void> {
   // Backquote (`) toggles the developer overlay: stats and live handling sliders.
   const tweaksEl = document.getElementById("tweaks") as HTMLDivElement;
   buildTweakPanel(tweaksEl, world.player.frame);
+  world.onPlayerFrameChanged = () => {
+    tweaksEl.replaceChildren();
+    buildTweakPanel(tweaksEl, world.player.frame);
+  };
   window.addEventListener("keydown", (e) => {
     if (e.code !== "Backquote") return;
     debugEl.hidden = !debugEl.hidden;

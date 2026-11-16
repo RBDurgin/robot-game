@@ -17,11 +17,18 @@ export interface MechState {
   /** True while weapons are locked out after hitting the heat cap. */
   overheated: boolean;
   boostTime: number;
+  /** Dashes ready to use. */
+  boostCharges: number;
+  /** Seconds until the next dash charge is restored (0 when full). */
   boostCooldown: number;
   boostDirX: number;
   boostDirZ: number;
   grounded: boolean;
   jetting: boolean;
+  /** Seconds spent standing still, capped at the frame's brace delay. */
+  braceTime: number;
+  /** True while a frame with a brace stance is dug in. */
+  braced: boolean;
   /** Movement multiplier, reduced by leg damage (1 = undamaged). */
   mobility: number;
   /** Ground distance walked so far, metres. A foot plants every `frame.strideLength`. */
@@ -43,11 +50,14 @@ export function createMechState(frame: FrameDef, yaw = 0): MechState {
     heat: 0,
     overheated: false,
     boostTime: 0,
+    boostCharges: frame.boostCharges ?? 1,
     boostCooldown: 0,
     boostDirX: 0,
     boostDirZ: 1,
     grounded: true,
     jetting: false,
+    braceTime: 0,
+    braced: false,
     mobility: 1,
     strideDistance: 0,
     footstep: false,
@@ -106,12 +116,23 @@ export function stepMech(s: MechState, frame: FrameDef, intent: Intent, grounded
     s.legsYaw = approachAngle(s.legsYaw, s.torsoYaw, frame.legTurnRate * 0.5 * dt);
   }
 
-  // Boost dash: a short burst at fixed speed in the travel direction.
-  s.boostCooldown = Math.max(0, s.boostCooldown - dt);
-  if (intent.boost && s.boostTime <= 0 && s.boostCooldown <= 0 && s.energy >= frame.boostCost && s.mobility > 0.3) {
+  // Boost dash: a short burst at fixed speed in the travel direction. Each dash uses a charge;
+  // charges come back one at a time.
+  const maxCharges = frame.boostCharges ?? 1;
+  if (s.boostCharges >= maxCharges) {
+    s.boostCooldown = 0;
+  } else {
+    s.boostCooldown -= dt;
+    if (s.boostCooldown <= 0) {
+      s.boostCharges++;
+      s.boostCooldown = s.boostCharges < maxCharges ? frame.boostCooldown : 0;
+    }
+  }
+  if (intent.boost && s.boostTime <= 0 && s.boostCharges > 0 && s.energy >= frame.boostCost && s.mobility > 0.3) {
     spendEnergy(s, frame, frame.boostCost);
     s.boostTime = frame.boostDuration;
-    s.boostCooldown = frame.boostCooldown;
+    if (s.boostCharges >= maxCharges) s.boostCooldown = frame.boostCooldown;
+    s.boostCharges--;
     if (moving) {
       const l = Math.hypot(wx, wz);
       s.boostDirX = wx / l;
@@ -161,6 +182,15 @@ export function stepMech(s: MechState, frame: FrameDef, intent: Intent, grounded
       s.jetting = true;
     }
     s.vel.y = Math.max(s.vel.y, -MAX_FALL_SPEED);
+  }
+
+  // Brace stance: standing still on the ground for a moment digs the frame in.
+  if (frame.brace) {
+    const still = onGround && !moving && s.boostTime <= 0 && s.vel.y <= 0.01 && Math.hypot(s.vel.x, s.vel.z) < 0.5;
+    s.braceTime = still ? Math.min(frame.brace.delay, s.braceTime + dt) : 0;
+    s.braced = s.braceTime >= frame.brace.delay;
+  } else {
+    s.braced = false;
   }
 
   // Energy recharges after a short pause.

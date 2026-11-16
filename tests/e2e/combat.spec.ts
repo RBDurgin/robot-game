@@ -32,9 +32,11 @@ test("player can shoot and destroy an enemy; enemies fight back", async ({ page 
       };
     };
     (window as unknown as { __track: number }).__track = window.setInterval(track, 16);
-    return { enemies: w.enemies.length, name: enemy.name };
+    return { enemies: w.enemies.length, name: enemy.name, frames: [...new Set(w.enemies.map((m) => m.frame.id))].sort() };
   });
   expect(setup.enemies).toBe(5);
+  // The squads are mixed: scouts, line suits and a siege suit.
+  expect(setup.frames).toEqual(["heavy", "light", "medium"]);
 
   await waitTicks(page, 90);
   await page.screenshot({ path: `${SHOTS}/05-firefight.png` });

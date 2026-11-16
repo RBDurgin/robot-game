@@ -16,6 +16,12 @@ export interface AiConfig {
   aimJitter: number;
   /** Seconds between spotting a target and reacting. */
   reaction: number;
+  /** How hard the pilot strafes while fighting, 0 (plants its feet) to 1. */
+  strafe: number;
+  /** Evasive dashes per second while a target is in sight. */
+  dashRate: number;
+  /** Hold fire beyond this distance (short-ranged weapons would only build heat). */
+  fireRange: number;
 }
 
 export const DEFAULT_AI: AiConfig = {
@@ -26,7 +32,22 @@ export const DEFAULT_AI: AiConfig = {
   retreatHealth: 0.3,
   aimJitter: 0.035,
   reaction: 0.5,
+  strafe: 0.8,
+  dashRate: 0.25,
+  fireRange: 400,
 };
+
+/** How a pilot fights. Squads mix roles so that a fight has more than one problem in it. */
+export const AI_ROLES = {
+  /** Holds the middle distance and trades fire. */
+  line: DEFAULT_AI,
+  /** Never stops moving: closes in, circles hard, dashes often. */
+  skirmisher: { ...DEFAULT_AI, minRange: 18, maxRange: 50, strafe: 1, dashRate: 0.7, retreatHealth: 0.4, aimJitter: 0.045, fireRange: 120 },
+  /** Stays back and stands its ground, which lets a heavy frame brace. */
+  support: { ...DEFAULT_AI, detectRange: 150, minRange: 80, maxRange: 170, strafe: 0, dashRate: 0.05, retreatHealth: 0.15, reaction: 0.8 },
+} satisfies Record<string, AiConfig>;
+
+export type AiRole = keyof typeof AI_ROLES;
 
 export interface AiState {
   mode: AiMode;
@@ -196,10 +217,10 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       const far = view.weaponsFree ? cfg.maxRange : cfg.maxRange * 1.3;
       const radial = !target.visible || targetDist > far ? 1 : targetDist < near ? -1 : 0;
       intent.moveZ = radial;
-      intent.moveX = target.visible ? ai.strafeDir * 0.8 : 0;
+      intent.moveX = target.visible ? ai.strafeDir * cfg.strafe : 0;
       intent.sprint = radial === 1 && targetDist > cfg.maxRange * 1.5;
     }
-    trackStuck(ai, view, true, dt);
+    trackStuck(ai, view, intent.moveX !== 0 || intent.moveZ !== 0, dt);
 
     // Fire in bursts, easing off as heat builds.
     ai.burstTimer -= dt;
@@ -208,12 +229,14 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       ai.burstTimer = ai.firing ? 0.9 + rng() * 0.9 : 0.6 + rng() * 0.8;
     }
     if (target.visible && view.weaponsFree) {
-      intent.firePrimary = ai.firing && view.heatFrac < 0.85;
-      intent.fireSecondary = targetDist > 25 && view.heatFrac < 0.6;
+      const inReach = targetDist < cfg.fireRange;
+      intent.firePrimary = inReach && ai.firing && view.heatFrac < 0.85;
+      intent.fireSecondary = inReach && targetDist > 25 && view.heatFrac < 0.6;
+      intent.fireTertiary = intent.fireSecondary;
       intent.melee = targetDist < 6;
     }
     // Occasional evasive dash.
-    if (target.visible) intent.boost = view.energyFrac > 0.5 && rng() < dt * 0.25;
+    if (target.visible) intent.boost = view.energyFrac > 0.5 && rng() < dt * cfg.dashRate;
   }
 
   intent.jump = ai.jumpTimer > 0;

@@ -1,15 +1,21 @@
 import type { FactionId } from "./factions";
 import type { FrameId } from "./frames";
 import type { EnemyLoadoutId } from "./loadouts";
+import type { AiRole } from "../sim/ai/brain";
+
+export interface SquadMember {
+  frame: FrameId;
+  loadout: EnemyLoadoutId;
+  role: AiRole;
+}
 
 export interface SquadDef {
   id: string;
   faction: FactionId;
-  frame: FrameId;
   /** Patrol loop as [x, z] offsets from the enemy outpost centre. */
   patrol: [number, number][];
   /** One entry per mech; each starts at a different point on the loop. */
-  members: EnemyLoadoutId[];
+  members: SquadMember[];
 }
 
 /** Tuning for how dangerous enemy pilots are compared with the player. */
@@ -29,7 +35,6 @@ export const SLICE_SQUADS: SquadDef[] = [
   {
     id: "garrison",
     faction: "combine",
-    frame: "medium",
     // Loop around the inside of the compound walls, clear of the bunker.
     patrol: [
       [-24, -24],
@@ -37,12 +42,15 @@ export const SLICE_SQUADS: SquadDef[] = [
       [24, 26],
       [-24, 26],
     ],
-    members: ["trooper", "rifleman", "marksman"],
+    members: [
+      { frame: "medium", loadout: "trooper", role: "line" },
+      { frame: "heavy", loadout: "bombard", role: "support" },
+      { frame: "medium", loadout: "marksman", role: "line" },
+    ],
   },
   {
     id: "picket",
     faction: "combine",
-    frame: "medium",
     // Outside the south gate, sweeping toward the wreck field and back.
     patrol: [
       [0, -60],
@@ -50,6 +58,9 @@ export const SLICE_SQUADS: SquadDef[] = [
       [-150, -70],
       [-70, -45],
     ],
-    members: ["skirmisher", "rifleman"],
+    members: [
+      { frame: "light", loadout: "skirmisher", role: "skirmisher" },
+      { frame: "light", loadout: "lancer", role: "line" },
+    ],
   },
 ];

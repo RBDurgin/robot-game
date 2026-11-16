@@ -1,7 +1,7 @@
 import type { Loadout } from "../data/loadouts";
 import { LOOT } from "../data/lootTables";
 import type { PlatingId } from "../data/parts";
-import type { ItemId } from "./loadout";
+import { fittedWeapons, type ItemId } from "./loadout";
 
 export interface LootDrop {
   items: ItemId[];
@@ -11,8 +11,8 @@ export interface LootDrop {
 /** Roll the salvage left behind by a destroyed mech that carried `loadout`. */
 export function rollLoot(loadout: Loadout, rng: () => number, table = LOOT): LootDrop {
   const items: ItemId[] = [];
-  for (const weapon of [loadout.armR, loadout.armL]) {
-    if (weapon && rng() < table.weaponChance) items.push(weapon);
+  for (const [, weapon] of fittedWeapons(loadout)) {
+    if (rng() < table.weaponChance) items.push(weapon);
   }
   if (rng() < table.platingChance) {
     const entries = Object.entries(table.platingWeights) as [PlatingId, number][];

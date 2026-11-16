@@ -11,7 +11,9 @@ export type AttachmentName =
   | "hand"
   | "muzzle"
   | "jet_l"
-  | "jet_r";
+  | "jet_r"
+  | "mount_l"
+  | "mount_r";
 
 /**
  * Named animation channels. Procedural parts read the ones they understand and move
@@ -30,6 +32,8 @@ export interface PartPose {
   recoil?: number;
   /** 0 to 1 thruster intensity. */
   thrust?: number;
+  /** 0 to 1, legs bent in a braced stance. */
+  crouch?: number;
 }
 
 /**

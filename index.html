@@ -46,6 +46,13 @@
       .stats .dim { color: #9aa6b3; }
       .problems { margin: 4px 0; padding-left: 18px; color: #ff6b5a; }
       .problems:empty { display: none; }
+      .panel.wide { width: min(680px, 100%); }
+      .frames { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 12px; table-layout: fixed; }
+      .frames th, .frames td { text-align: left; padding: 3px 8px; border-bottom: 1px solid #222a33; vertical-align: top; }
+      .frames th:first-child { width: 70px; color: #8a97a6; font-weight: 400; }
+      .frames td { font-family: ui-monospace, Menlo, Consolas, monospace; color: #c3ccd6; }
+      .frames .selected { background: #1d2530; color: #fff; }
+      .frames thead .selected { color: #f0a55a; }
       .inventory { margin: 0; padding-left: 18px; columns: 2; color: #c3ccd6; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
       button { font: inherit; padding: 8px 16px; border-radius: 5px; border: 1px solid transparent; cursor: pointer; }

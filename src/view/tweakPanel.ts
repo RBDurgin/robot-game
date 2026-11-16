@@ -1,6 +1,6 @@
 import type { FrameDef } from "../data/frames";
 
-type NumericKey = { [K in keyof FrameDef]: FrameDef[K] extends number ? K : never }[keyof FrameDef];
+type NumericKey = { [K in keyof FrameDef]-?: FrameDef[K] extends number ? K : never }[keyof FrameDef];
 
 /** Handling values worth tuning by feel, with slider ranges. */
 const TWEAKS: [NumericKey, number, number, number][] = [

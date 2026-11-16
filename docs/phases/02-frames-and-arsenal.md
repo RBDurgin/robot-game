@@ -1,6 +1,6 @@
 # Phase 2: Frames and arsenal
 
-**Status: not started.** Size: 2 to 3 sessions. Depends on: phase 1.
+**Status: built, waiting for the user playtest.** Size: 2 to 3 sessions. Depends on: phase 1.
 
 ## Goal
 
@@ -15,6 +15,24 @@ The hangar and loot only become interesting when there is more than one frame an
 1. How different should frames be: subtle variations, or distinct roles (scout, line, siege)?
 2. Should each frame have a signature ability, or differ only in numbers?
 3. Does the player start with all three frames, or earn the others? (Unlocking itself is phase 5; this decides what the hangar shows now.)
+
+## Decisions (settled 2026-11-15)
+
+1. Frames have distinct roles: Kite (light, scout), Warden (medium, line), Bastion (heavy, siege).
+2. Signature abilities: the Kite stores two dash charges; the Bastion braces when it stands still
+   (less damage taken, tighter spread). The Warden has none.
+3. All three frames can be chosen in the hangar now. Phase 5 adds the locks.
+
+## What was built
+
+- Frames, hardpoints, abilities and model proportions are rows in `src/data/frames.ts`.
+- A loadout is `{ weapons: { [hardpoint]: weapon }, plating }`. The heavy frame adds two shoulder
+  mounts, fired with E or the middle mouse button, which only take weapons marked `shoulder`.
+- New weapons: SG-5 Scatter Gun, LB-3 Lance Beam, SR-8 Seeker Rack. Their rules (pellet spread,
+  beam pulses, lock-on, missile steering) are in `src/sim/weapons.ts`.
+- Enemy squads mix all three frames, with the AI roles in `AI_ROLES` (`src/sim/ai/brain.ts`).
+- New weapons are only found as salvage. Open the game with `?arsenal` to stock the hangar with
+  two of everything for a playtest.
 
 ## Build steps
 
@@ -57,15 +75,15 @@ Unlocking and buying frames (phase 5). Imported models (phase 7).
 
 ## Checklist
 
-- [ ] Frame differences and abilities agreed
-- [ ] Light frame data and tuning
-- [ ] Heavy frame data and tuning
-- [ ] Frame abilities in sim with tests
-- [ ] Visual variants
-- [ ] Hardpoint list replaces fixed arms
-- [ ] Beam weapon
-- [ ] Scatter weapon
-- [ ] Guided missile and lock-on
-- [ ] Mixed enemy squads and AI roles
-- [ ] Hangar frame selection
+- [x] Frame differences and abilities agreed
+- [x] Light frame data (numbers are first guesses: tune in the playtest)
+- [x] Heavy frame data (numbers are first guesses: tune in the playtest)
+- [x] Frame abilities in sim with tests
+- [x] Visual variants
+- [x] Hardpoint list replaces fixed arms
+- [x] Beam weapon
+- [x] Scatter weapon
+- [x] Guided missile and lock-on
+- [x] Mixed enemy squads and AI roles
+- [x] Hangar frame selection
 - [ ] User playtest and sign-off

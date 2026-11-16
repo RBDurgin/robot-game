@@ -3,13 +3,13 @@ import type { Page } from "@playwright/test";
 export const SHOTS = "tests/e2e/screenshots";
 
 /** Load the game and wait until it is running. Returns a live list of console/page errors. */
-export async function boot(page: Page): Promise<string[]> {
+export async function boot(page: Page, url = "/"): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
     if (m.type() === "error") errors.push(m.text());
   });
-  await page.goto("/");
+  await page.goto(url);
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   return errors;
 }

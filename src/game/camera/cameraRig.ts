@@ -5,7 +5,8 @@ import { raycastWorld } from "../physics";
 
 export type ViewMode = "third" | "cockpit";
 
-const THIRD = { distance: 11, shoulder: 2.2, lift: 1.2, fov: 0.95 };
+/** Third-person framing for a medium frame; bigger and smaller frames scale it to keep the same view. */
+const THIRD = { distance: 11, shoulder: 2.2, lift: 1.2, fov: 0.95, frameHeight: 4.6 };
 const COCKPIT_FOV = 1.15;
 const AIM_RANGE = 600;
 
@@ -58,10 +59,12 @@ export class CameraRig {
       target.visual.setVisible(target.alive);
       const pivot = target.renderPosition.add(new Vector3(0, target.frame.height * 0.85, 0));
       const right = new Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      // A heavy frame is wider as well as taller, so the camera also moves further out to the side.
+      const k = target.frame.height / THIRD.frameHeight;
       const desired = pivot
-        .subtract(forward.scale(THIRD.distance))
-        .addInPlace(right.scale(THIRD.shoulder))
-        .addInPlace(new Vector3(0, THIRD.lift, 0));
+        .subtract(forward.scale(THIRD.distance * k))
+        .addInPlace(right.scale(THIRD.shoulder * k * target.frame.look.bulk))
+        .addInPlace(new Vector3(0, THIRD.lift * k, 0));
       // Pull the camera in if terrain or a wall is between it and the mech.
       const hit = raycastWorld(this.scene, pivot, desired);
       if (hit) {

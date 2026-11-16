@@ -1,5 +1,6 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import type { ColorScheme } from "../../data/factions";
+import type { FrameLook } from "../../data/frames";
 import type { AttachmentName, PartPose, PartVisual } from "./PartVisual";
 
 export interface PartMaterials {
@@ -127,23 +128,24 @@ export class ProceduralLegs extends ProceduralPartVisual {
   private readonly knees: [TransformNode, TransformNode];
   private readonly hipHeight: number;
 
-  constructor(scene: Scene, mats: PartMaterials, hipHeight = 2.2) {
+  /** `b` is the frame's bulk: 1 for the medium build, thinner below, thicker above. */
+  constructor(scene: Scene, mats: PartMaterials, hipHeight = 2.2, b = 1) {
     super(scene, "legs", mats);
     this.hipHeight = hipHeight;
     const seg = hipHeight / 2;
 
     this.pelvis = this.node("pelvis", this.root, 0, hipHeight, 0);
-    this.box("pelvisBlock", this.pelvis, [1.5, 0.55, 1.0], [0, 0.1, 0], mats.secondary);
+    this.box("pelvisBlock", this.pelvis, [1.5 * b, 0.55, 1.0 * b], [0, 0.1, 0], mats.secondary);
     this.attach("hip", this.pelvis, 0, 0.4, 0);
 
     const build = (side: -1 | 1): [TransformNode, TransformNode] => {
-      const hip = this.node(`hip${side}`, this.pelvis, side * 0.62, 0, 0);
-      this.box("thigh", hip, [0.55, seg, 0.7], [0, -seg / 2, 0], mats.primary);
-      this.box("thighPlate", hip, [0.2, seg * 0.7, 0.8], [side * 0.32, -seg * 0.45, 0], mats.secondary);
+      const hip = this.node(`hip${side}`, this.pelvis, side * 0.62 * b, 0, 0);
+      this.box("thigh", hip, [0.55 * b, seg, 0.7 * b], [0, -seg / 2, 0], mats.primary);
+      this.box("thighPlate", hip, [0.2 * b, seg * 0.7, 0.8 * b], [side * 0.32 * b, -seg * 0.45, 0], mats.secondary);
       const knee = this.node("knee", hip, 0, -seg, 0);
-      this.box("kneeCap", knee, [0.6, 0.35, 0.5], [0, 0, 0.3], mats.metal);
-      this.box("shin", knee, [0.45, seg - 0.2, 0.55], [0, -(seg - 0.2) / 2, 0], mats.secondary);
-      this.box("foot", knee, [0.7, 0.28, 1.2], [0, -seg + 0.14, 0.2], mats.primary);
+      this.box("kneeCap", knee, [0.6 * b, 0.35, 0.5 * b], [0, 0, 0.3 * b], mats.metal);
+      this.box("shin", knee, [0.45 * b, seg - 0.2, 0.55 * b], [0, -(seg - 0.2) / 2, 0], mats.secondary);
+      this.box("foot", knee, [0.7 * b, 0.28, 1.2 * b], [0, -seg + 0.14, 0.2 * b], mats.primary);
       return [hip, knee];
     };
     const [hipL, kneeL] = build(-1);
@@ -156,45 +158,70 @@ export class ProceduralLegs extends ProceduralPartVisual {
     const phase = pose.walkPhase ?? 0;
     const stride = pose.stride ?? 0;
     const air = pose.airborne ?? 0;
+    // Braced: thighs forward and knees folded by the same angle, which keeps the feet planted
+    // under the hips while the body sinks.
+    const bend = (pose.crouch ?? 0) * 0.45;
     for (let i = 0; i < 2; i++) {
       const p = phase + i * Math.PI;
       const swing = Math.sin(p);
       // Negative X rotation swings the leg forward (+Z). The knee only ever folds backward,
       // and folds most while the leg is travelling forward through the air.
-      const hipAngle = -swing * 0.6 * stride - air * 0.35;
-      const kneeAngle = Math.max(0, Math.cos(p)) * 0.9 * stride + air * 0.8 + 0.08;
+      const hipAngle = -swing * 0.6 * stride - air * 0.35 - bend;
+      const kneeAngle = Math.max(0, Math.cos(p)) * 0.9 * stride + air * 0.8 + 0.08 + bend * 2;
       this.hips[i]!.rotation.x = hipAngle;
       this.knees[i]!.rotation.x = kneeAngle;
     }
     // Body drops slightly twice per cycle as each foot plants.
-    this.pelvis.position.y = this.hipHeight - Math.abs(Math.sin(phase)) * 0.12 * stride;
+    this.pelvis.position.y = this.hipHeight * Math.cos(bend) - Math.abs(Math.sin(phase)) * 0.12 * stride;
   }
 }
 
 /** Torso with cockpit canopy. Origin is at the hip joint. */
 export class ProceduralTorso extends ProceduralPartVisual {
-  constructor(scene: Scene, mats: PartMaterials) {
+  /** `b` is the frame's bulk. `mounts` adds pedestals for shoulder weapons either side of the head. */
+  constructor(scene: Scene, mats: PartMaterials, b = 1, mounts = false) {
     super(scene, "torso", mats);
-    this.box("waist", this.root, [0.9, 0.4, 0.8], [0, 0.2, 0], mats.metal);
-    this.box("chest", this.root, [2.0, 1.25, 1.35], [0, 1.0, 0], mats.primary);
-    this.box("chestPlate", this.root, [1.3, 0.7, 0.3], [0, 0.85, 0.72], mats.secondary);
-    this.box("canopy", this.root, [0.8, 0.4, 0.25], [0, 1.35, 0.72], mats.accent);
-    this.box("collar", this.root, [2.3, 0.3, 1.0], [0, 1.7, -0.05], mats.secondary);
-    this.attach("shoulder_l", this.root, -1.35, 1.4, 0);
-    this.attach("shoulder_r", this.root, 1.35, 1.4, 0);
+    // Depth grows with bulk too, but less than width, so a heavy frame reads as broad.
+    const d = 0.6 + 0.4 * b;
+    this.box("waist", this.root, [0.9 * b, 0.4, 0.8 * d], [0, 0.2, 0], mats.metal);
+    this.box("chest", this.root, [2.0 * b, 1.25, 1.35 * d], [0, 1.0, 0], mats.primary);
+    this.box("chestPlate", this.root, [1.3 * b, 0.7, 0.3], [0, 0.85, 0.675 * d + 0.045], mats.secondary);
+    this.box("canopy", this.root, [0.8, 0.4, 0.25], [0, 1.35, 0.675 * d + 0.045], mats.accent);
+    this.box("collar", this.root, [2.3 * b, 0.3, 1.0 * d], [0, 1.7, -0.05], mats.secondary);
+    this.attach("shoulder_l", this.root, -1.35 * b, 1.4, 0);
+    this.attach("shoulder_r", this.root, 1.35 * b, 1.4, 0);
     this.attach("neck", this.root, 0, 1.85, 0.1);
-    this.attach("back", this.root, 0, 1.0, -0.7);
-    this.attach("cockpit", this.root, 0, 1.45, 0.95);
+    this.attach("back", this.root, 0, 1.0, -0.7 * d);
+    this.attach("cockpit", this.root, 0, 1.45, 0.95 * d);
+    if (mounts) {
+      for (const side of [-1, 1] as const) {
+        this.box("mountPedestal", this.root, [0.45, 0.6, 0.6], [side * 0.75 * b, 2.1, -0.2], mats.metal);
+        this.attach(side < 0 ? "mount_l" : "mount_r", this.root, side * 0.75 * b, 2.55, -0.2);
+      }
+    }
   }
 }
 
 /** Sensor head. Origin is at the neck. */
 export class ProceduralHead extends ProceduralPartVisual {
-  constructor(scene: Scene, mats: PartMaterials) {
+  constructor(scene: Scene, mats: PartMaterials, style: FrameLook["head"] = "visor") {
     super(scene, "head", mats);
-    this.box("skull", this.root, [0.7, 0.5, 0.75], [0, 0.25, 0], mats.primary);
-    this.box("visor", this.root, [0.55, 0.14, 0.1], [0, 0.28, 0.4], mats.accent);
-    this.box("antenna", this.root, [0.06, 0.6, 0.06], [0.3, 0.7, -0.2], mats.metal);
+    if (style === "mast") {
+      // Scout: narrow head under a tall sensor mast.
+      this.box("skull", this.root, [0.5, 0.42, 0.8], [0, 0.21, 0.05], mats.primary);
+      this.box("visor", this.root, [0.4, 0.12, 0.1], [0, 0.24, 0.48], mats.accent);
+      this.box("mast", this.root, [0.08, 1.3, 0.08], [0, 1.0, -0.25], mats.metal);
+      this.box("mastVane", this.root, [0.5, 0.1, 0.25], [0, 1.45, -0.25], mats.accent);
+    } else if (style === "dome") {
+      // Siege: a low armored block sunk between the shoulders.
+      this.box("skull", this.root, [1.0, 0.36, 0.95], [0, 0.18, 0], mats.primary);
+      this.box("visor", this.root, [0.8, 0.1, 0.1], [0, 0.2, 0.5], mats.accent);
+      this.box("brow", this.root, [1.1, 0.12, 0.5], [0, 0.4, 0.2], mats.secondary);
+    } else {
+      this.box("skull", this.root, [0.7, 0.5, 0.75], [0, 0.25, 0], mats.primary);
+      this.box("visor", this.root, [0.55, 0.14, 0.1], [0, 0.28, 0.4], mats.accent);
+      this.box("antenna", this.root, [0.06, 0.6, 0.06], [0.3, 0.7, -0.2], mats.metal);
+    }
   }
 }
 
@@ -203,13 +230,15 @@ export class ProceduralArm extends ProceduralPartVisual {
   private readonly pivot: TransformNode;
   private readonly forearm: TransformNode;
 
-  constructor(scene: Scene, mats: PartMaterials, side: -1 | 1) {
+  constructor(scene: Scene, mats: PartMaterials, side: -1 | 1, b = 1) {
     super(scene, side < 0 ? "armL" : "armR", mats);
-    this.box("pauldron", this.root, [0.75, 0.7, 1.0], [side * 0.1, 0.1, 0], mats.primary);
+    // Pauldrons grow faster than the rest: slight on a scout, slabs on a siege frame.
+    const p = b * b;
+    this.box("pauldron", this.root, [0.75 * p, 0.7 * p, 1.0 * p], [side * 0.1, 0.1, 0], mats.primary);
     this.pivot = this.node("pivot", this.root, side * 0.15, 0, 0);
-    this.box("upper", this.pivot, [0.45, 0.95, 0.5], [0, -0.55, 0], mats.secondary);
+    this.box("upper", this.pivot, [0.45 * b, 0.95, 0.5 * b], [0, -0.55, 0], mats.secondary);
     this.forearm = this.node("forearm", this.pivot, 0, -1.0, 0.1);
-    this.box("lower", this.forearm, [0.5, 0.5, 1.0], [0, 0, 0.4], mats.primary);
+    this.box("lower", this.forearm, [0.5 * b, 0.5 * b, 1.0], [0, 0, 0.4], mats.primary);
     this.attach("hand", this.forearm, 0, 0, 0.95);
   }
 
@@ -223,11 +252,19 @@ export class ProceduralArm extends ProceduralPartVisual {
 export class ProceduralBackpack extends ProceduralPartVisual {
   private readonly flames: Mesh[] = [];
 
-  constructor(scene: Scene, mats: PartMaterials) {
+  constructor(scene: Scene, mats: PartMaterials, b = 1) {
     super(scene, "backpack", mats);
-    this.box("pack", this.root, [1.5, 1.1, 0.6], [0, 0.1, -0.3], mats.secondary);
+    this.box("pack", this.root, [1.5 * b, 1.1, 0.6], [0, 0.1, -0.3], mats.secondary);
+    if (b < 0.9) {
+      // Light frames carry stabiliser fins for their second dash.
+      for (const side of [-1, 1] as const) {
+        const fin = this.box("fin", this.root, [0.08, 1.5, 0.55], [side * 0.75, 0.55, -0.55], mats.primary);
+        fin.rotation.z = -side * 0.45;
+        fin.rotation.x = -0.35;
+      }
+    }
     for (const side of [-1, 1] as const) {
-      const nozzle = this.attach(side < 0 ? "jet_l" : "jet_r", this.root, side * 0.45, -0.45, -0.45);
+      const nozzle = this.attach(side < 0 ? "jet_l" : "jet_r", this.root, side * 0.45 * b, -0.45, -0.45);
       nozzle.rotation.x = -0.5;
       this.cylinder("nozzle", nozzle, { height: 0.5, top: 0.35, bottom: 0.5 }, [0, -0.25, 0], mats.metal);
       const flame = this.cylinder("flame", nozzle, { height: 1.6, top: 0.4, bottom: 0.02 }, [0, -1.3, 0], mats.flame);
@@ -246,7 +283,7 @@ export class ProceduralBackpack extends ProceduralPartVisual {
   }
 }
 
-export type WeaponShape = "rifle" | "launcher";
+export type WeaponShape = "rifle" | "launcher" | "emitter" | "scatter";
 
 /** Weapon model held in the hand. Origin is at the grip; barrel points along +Z. */
 export class ProceduralWeapon extends ProceduralPartVisual {
@@ -256,6 +293,17 @@ export class ProceduralWeapon extends ProceduralPartVisual {
       this.box("body", this.root, [0.35, 0.45, 1.3], [0, 0, 0.35], mats.metal);
       this.box("barrel", this.root, [0.16, 0.16, 1.5], [0, 0.05, 1.6], mats.secondary);
       this.attach("muzzle", this.root, 0, 0.05, 2.4);
+    } else if (shape === "emitter") {
+      // Beam: a slim body, a long rod and a glowing lens.
+      this.box("body", this.root, [0.4, 0.5, 1.1], [0, 0, 0.3], mats.metal);
+      this.cylinder("rod", this.root, { height: 1.7, top: 0.14, bottom: 0.22 }, [0, 0.05, 1.6], mats.secondary).rotation.x = Math.PI / 2;
+      this.box("lens", this.root, [0.3, 0.3, 0.12], [0, 0.05, 2.45], mats.accent);
+      this.attach("muzzle", this.root, 0, 0.05, 2.5);
+    } else if (shape === "scatter") {
+      // Scatter gun: short, with a wide flared mouth.
+      this.box("body", this.root, [0.45, 0.5, 1.1], [0, 0, 0.3], mats.metal);
+      this.box("mouth", this.root, [0.7, 0.4, 0.7], [0, 0.05, 1.15], mats.secondary);
+      this.attach("muzzle", this.root, 0, 0.05, 1.5);
     } else {
       this.box("body", this.root, [0.6, 0.6, 1.5], [0, 0.05, 0.5], mats.metal);
       this.box("tubes", this.root, [0.5, 0.5, 0.3], [0, 0.05, 1.4], mats.secondary);

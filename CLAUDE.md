@@ -1,7 +1,7 @@
 # Robot Game
 
-3D mech combat game: Babylon.js + TypeScript, runs in the browser via Vite. Currently a vertical
-slice (one zone, one playable frame, one enemy faction).
+3D mech combat game: Babylon.js + TypeScript, runs in the browser via Vite. Currently one zone,
+three playable frames (light, medium, heavy) and one enemy faction.
 
 The roadmap is in `docs/roadmap.md`, with one document per phase in `docs/phases/`. Before starting
 work, read the roadmap and the document for the current phase, and settle that phase's "Decide
@@ -35,7 +35,11 @@ Key seams:
 - `Intent` (`src/sim/intent.ts`): player input and AI both produce one; all mechs share the same code.
 - `PartVisual` (`src/view/parts/PartVisual.ts`): the only interface gameplay has to a part's
   appearance. Procedural parts implement it now; a glTF-backed implementation can be added later.
-- `FrameDef` (`src/data/frames.ts`): light/heavy frames are new data rows, not new controller code.
+- `FrameDef` (`src/data/frames.ts`): a frame is a data row: handling, abilities (dash charges,
+  brace), hardpoints and model proportions. No frame has its own controller code.
+- Hardpoints: a `Loadout` maps hardpoint ids to weapons. Each hardpoint names the trigger that
+  fires it and the section that carries it, so combat and the hangar loop over
+  `frame.hardpoints` rather than naming arms.
 
 ## Things that are easy to get wrong
 
@@ -51,12 +55,19 @@ Key seams:
   and lightningcss ship one native package per platform, so tools fail in whichever environment did
   not run the install. Add the missing platform's packages next to the existing ones (same versions
   as `package-lock.json`) rather than reinstalling, which can remove the other platform's.
+- The player's `MechEntity` is replaced when the frame changes in the hangar, so do not hold on
+  to `world.player` across a deploy.
+- Beam weapons give `damage` and `heat` per second, not per shot.
+- Saves written before phase 2 have `armL`/`armR` in the loadout and no frame. `parseSave` in
+  `src/game/save.ts` reads both shapes; keep it that way when the save format changes again.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 
 ## Dev tools in the game
 
 Backquote (`) toggles a stats overlay and live sliders for the player frame's handling values.
+
+Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating.
 
 Profiling: open the game with `?profile` in the URL. It records per-frame timings and counters
 (`src/game/perf.ts`) and the dev server saves them to `perf/` (ignored by git) each time a menu
