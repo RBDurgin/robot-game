@@ -1,7 +1,7 @@
 // Summarise a recording made by the game itself (open it with ?profile, play, press Esc).
 // Called by analyze-trace.mjs when the file is a recording rather than a Chrome trace.
-const SPANS = ["frame", "step", "step.player", "step.ai", "step.projectiles", "step.physics", "visuals", "hud", "scene.render"];
-const COUNTERS = ["gpu", "draws", "meshes", "effects"];
+const SPANS = ["frame", "step", "step.world", "step.player", "step.ai", "step.projectiles", "step.physics", "stream", "visuals", "hud", "scene.render"];
+const COUNTERS = ["gpu", "draws", "meshes", "effects", "chunks", "queued", "streamJobs"];
 const fmt = (n, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : "-").padStart(8);
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length * p) / 100))];
 const mean = (list, get) => (list.length ? list.reduce((sum, f) => sum + (get(f) ?? 0), 0) / list.length : NaN);
@@ -87,6 +87,6 @@ export function report(data, file) {
 
   console.log(`\nThe 15 slowest frames`);
   for (const f of [...timed].sort((a, b) => b.interval - a.interval).slice(0, 15)) {
-    console.log(`  ${((f.t - t0) / 1000).toFixed(1).padStart(6)}s interval ${f.interval.toFixed(1)}  js ${f.frame.toFixed(1)} (step ${(f.step ?? 0).toFixed(1)} x${f.steps}, render ${(f["scene.render"] ?? 0).toFixed(1)})  gpu ${f.gpu.toFixed(1)}  fighting ${f.fighting} effects ${f.effects}${f.events ? "  " + f.events.join(",") : ""}`);
+    console.log(`  ${((f.t - t0) / 1000).toFixed(1).padStart(6)}s interval ${f.interval.toFixed(1)}  js ${f.frame.toFixed(1)} (step ${(f.step ?? 0).toFixed(1)} x${f.steps}, render ${(f["scene.render"] ?? 0).toFixed(1)})  gpu ${f.gpu.toFixed(1)}  fighting ${f.fighting} effects ${f.effects} stream ${(f.stream ?? 0).toFixed(1)} x${f.streamJobs ?? 0}${f.events ? "  " + f.events.join(",") : ""}`);
   }
 }

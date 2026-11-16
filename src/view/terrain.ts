@@ -1,186 +1,200 @@
-import {
-  Color3,
-  Mesh,
-  MeshBuilder,
-  PhysicsShapeType,
-  Scene,
-  StandardMaterial,
-  VertexBuffer,
-  VertexData,
-} from "@babylonjs/core";
-import type { FlatArea, ZoneDef } from "../data/zone";
-import { addStaticCollider } from "../game/physics";
-import { clamp, lerp, makeRng } from "../sim/math";
-import { heightAt } from "../sim/terrain";
+import { Color3, Mesh, Scene, StandardMaterial, VertexData } from "@babylonjs/core";
+import type { RGB } from "../data/biomes";
+import type { WorldDef } from "../data/world";
+import { chunkOrigin } from "../sim/chunks";
+import { clamp, smoothstep } from "../sim/math";
+import { BIOME_COUNT, biomeList, rimFactor, sampleTerrain, type WorldModel } from "../sim/terrain";
 
-const SUBDIVISIONS = 150;
+const RIM_ROCK: RGB = [0.45, 0.44, 0.45];
+const RIM_SNOW: RGB = [0.88, 0.9, 0.93];
 
-const LOW = [0.33, 0.37, 0.25] as const; // scrub
-const MID = [0.5, 0.44, 0.33] as const; // dry earth
-const HIGH = [0.56, 0.55, 0.54] as const; // rock
-
-function mix(a: readonly number[], b: readonly number[], t: number): [number, number, number] {
-  return [lerp(a[0]!, b[0]!, t), lerp(a[1]!, b[1]!, t), lerp(a[2]!, b[2]!, t)];
+/** Heights and colours of one chunk on a square grid of `n` x `n` samples, row by row along +Z. */
+export interface TerrainGrid {
+  n: number;
+  heights: Float32Array;
+  /** Three values per sample. */
+  colors: Float32Array;
 }
 
-/** Builds the terrain mesh from the zone's height function and gives it a static collider. */
-export function buildTerrain(scene: Scene, zone: ZoneDef): Mesh {
-  const ground = MeshBuilder.CreateGround(
-    "terrain",
-    { width: zone.size, height: zone.size, subdivisions: SUBDIVISIONS, updatable: true },
-    scene,
-  );
-  const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
-  const colors = new Float32Array((positions.length / 3) * 4);
-  for (let i = 0, c = 0; i < positions.length; i += 3, c += 4) {
-    const h = heightAt(zone, positions[i]!, positions[i + 2]!);
-    positions[i + 1] = h;
-    const t = clamp(h / zone.relief, 0, 1.4);
-    const rgb = t < 0.5 ? mix(LOW, MID, t / 0.5) : mix(MID, HIGH, clamp((t - 0.5) / 0.5, 0, 1));
-    colors[c] = rgb[0];
-    colors[c + 1] = rgb[1];
-    colors[c + 2] = rgb[2];
-    colors[c + 3] = 1;
-  }
-  ground.updateVerticesData(VertexBuffer.PositionKind, positions);
-  ground.setVerticesData(VertexBuffer.ColorKind, colors);
-  const normals: number[] = [];
-  VertexData.ComputeNormals(positions, ground.getIndices(), normals);
-  ground.updateVerticesData(VertexBuffer.NormalKind, normals);
-  ground.convertToFlatShadedMesh();
-  ground.refreshBoundingInfo();
+const weights = new Float32Array(BIOME_COUNT);
 
+/** Ground colour for a height and biome mix: each biome's ramp from low to high, blended. */
+export function groundColor(def: WorldDef, x: number, z: number, h: number, mix: Float32Array, out: Float32Array, at: number): void {
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  const biomes = biomeList();
+  for (let i = 0; i < BIOME_COUNT; i++) {
+    const w = mix[i]!;
+    if (w <= 0) continue;
+    const biome = biomes[i]!;
+    const t = clamp((h - biome.elevation) / biome.relief, 0, 1);
+    const [from, to, k] = t < 0.5 ? [biome.colors.low, biome.colors.mid, t / 0.5] : [biome.colors.mid, biome.colors.high, (t - 0.5) / 0.5];
+    r += w * (from[0] + (to[0] - from[0]) * k);
+    g += w * (from[1] + (to[1] - from[1]) * k);
+    b += w * (from[2] + (to[2] - from[2]) * k);
+  }
+  const rim = rimFactor(def, x, z);
+  if (rim > 0) {
+    // The rim mountains are bare rock, snow-capped near the top.
+    const rock = Math.min(1, rim * 2.5);
+    const snow = smoothstep(0.55, 0.9, rim);
+    r += (RIM_ROCK[0] - r) * rock;
+    g += (RIM_ROCK[1] - g) * rock;
+    b += (RIM_ROCK[2] - b) * rock;
+    r += (RIM_SNOW[0] - r) * snow;
+    g += (RIM_SNOW[1] - g) * snow;
+    b += (RIM_SNOW[2] - b) * snow;
+  }
+  out[at] = r;
+  out[at + 1] = g;
+  out[at + 2] = b;
+}
+
+/** Sample a chunk's terrain at `cells` + 1 points per side. */
+export function sampleChunk(model: WorldModel, cx: number, cz: number, cells: number): TerrainGrid {
+  const def = model.def;
+  const n = cells + 1;
+  const x0 = chunkOrigin(def, cx);
+  const z0 = chunkOrigin(def, cz);
+  const step = def.chunkSize / cells;
+  const heights = new Float32Array(n * n);
+  const colors = new Float32Array(n * n * 3);
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      // Multiply rather than accumulate, so neighbouring chunks compute identical edge positions.
+      const x = x0 + ix * step;
+      const z = z0 + iz * step;
+      const i = iz * n + ix;
+      const h = sampleTerrain(model, x, z, weights);
+      heights[i] = h;
+      groundColor(def, x, z, h, weights, colors, i * 3);
+    }
+  }
+  return { n, heights, colors };
+}
+
+/** Keep every `divisor`-th sample of a grid. */
+export function subsampleGrid(grid: TerrainGrid, divisor: number): TerrainGrid {
+  if (divisor === 1) return grid;
+  const n = (grid.n - 1) / divisor + 1;
+  const heights = new Float32Array(n * n);
+  const colors = new Float32Array(n * n * 3);
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      const from = iz * divisor * grid.n + ix * divisor;
+      const to = iz * n + ix;
+      heights[to] = grid.heights[from]!;
+      colors.set(grid.colors.subarray(from * 3, from * 3 + 3), to * 3);
+    }
+  }
+  return { n, heights, colors };
+}
+
+export function terrainMaterial(scene: Scene): StandardMaterial {
   const mat = new StandardMaterial("terrainMat", scene);
   mat.specularColor = Color3.Black();
-  ground.material = mat;
-  ground.isPickable = false;
-
-  addStaticCollider(scene, ground, PhysicsShapeType.MESH, 0.9);
-  return ground;
-}
-
-function solidMaterial(scene: Scene, name: string, r: number, g: number, b: number): StandardMaterial {
-  const mat = new StandardMaterial(name, scene);
-  mat.diffuseColor = new Color3(r, g, b);
-  mat.specularColor = new Color3(0.05, 0.05, 0.05);
+  // Chunks never move, and there are a lot of them.
+  mat.freeze();
   return mat;
 }
 
-interface BlockSpec {
-  x: number;
-  z: number;
-  /** Height of the block's base above the ground. */
-  lift?: number;
-  size: [number, number, number];
-  rotY?: number;
-  tilt?: number;
-}
+/** True if Babylon treats a triangle whose right-hand normal faces the viewer as front-facing. */
+const RIGHT_HANDED_FRONT = ((): boolean => {
+  const normals: number[] = [];
+  // In the ground plane, right-hand normal pointing up.
+  VertexData.ComputeNormals([0, 0, 0, 0, 0, 1, 1, 0, 0], [0, 1, 2], normals);
+  return normals[1]! > 0;
+})();
 
-/** Static box with a collider, sitting on the terrain. */
-function placeBlock(scene: Scene, zone: ZoneDef, name: string, spec: BlockSpec, mat: StandardMaterial): Mesh {
-  const [w, h, d] = spec.size;
-  const m = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, scene);
-  m.position.set(spec.x, heightAt(zone, spec.x, spec.z) + (spec.lift ?? 0) + h / 2, spec.z);
-  m.rotation.y = spec.rotY ?? 0;
-  m.rotation.z = spec.tilt ?? 0;
-  m.material = mat;
-  m.isPickable = false;
-  addStaticCollider(scene, m, PhysicsShapeType.BOX);
-  return m;
-}
+/**
+ * Build the mesh for one chunk from its grid. Flat shaded: every triangle has its own vertices.
+ * A skirt hangs from the edges to hide the hairline gaps where a neighbour has a different
+ * level of detail.
+ */
+export function buildChunkMesh(scene: Scene, def: WorldDef, cx: number, cz: number, grid: TerrainGrid, material: StandardMaterial): Mesh {
+  const n = grid.n;
+  const cells = n - 1;
+  const step = def.chunkSize / cells;
+  const x0 = chunkOrigin(def, cx);
+  const z0 = chunkOrigin(def, cz);
+  const skirt = step * 1.5;
+  const triangles = cells * cells * 2 + cells * 8;
+  const positions = new Float32Array(triangles * 9);
+  const colors = new Float32Array(triangles * 12);
+  let v = 0;
 
-/** The player's home: a landing pad and an open-fronted hangar. */
-function buildBase(scene: Scene, zone: ZoneDef, area: FlatArea): void {
-  const wall = solidMaterial(scene, "baseWall", 0.42, 0.45, 0.48);
-  const trim = solidMaterial(scene, "baseTrim", 0.79, 0.47, 0.17);
-  const { x, z } = area;
-  placeBlock(scene, zone, "pad", { x, z, size: [26, 0.4, 26] }, solidMaterial(scene, "pad", 0.25, 0.26, 0.28));
-  // Hangar sits behind the pad, open toward +Z (the direction of the outpost).
-  const hz = z - 30;
-  placeBlock(scene, zone, "hangarBack", { x, z: hz - 9, size: [24, 11, 1.2] }, wall);
-  placeBlock(scene, zone, "hangarLeft", { x: x - 12, z: hz, size: [1.2, 11, 18] }, wall);
-  placeBlock(scene, zone, "hangarRight", { x: x + 12, z: hz, size: [1.2, 11, 18] }, wall);
-  placeBlock(scene, zone, "hangarRoof", { x, z: hz, lift: 11, size: [26, 1, 20] }, trim);
-  placeBlock(scene, zone, "beaconMast", { x: x - 20, z: z - 6, size: [1, 16, 1] }, trim);
-}
+  /** Add a vertex at grid point (ix, iz), dropped by `drop` metres. */
+  const vertex = (ix: number, iz: number, drop: number): void => {
+    const i = iz * n + ix;
+    positions[v * 3] = x0 + ix * step;
+    positions[v * 3 + 1] = grid.heights[i]! - drop;
+    positions[v * 3 + 2] = z0 + iz * step;
+    colors[v * 4] = grid.colors[i * 3]!;
+    colors[v * 4 + 1] = grid.colors[i * 3 + 1]!;
+    colors[v * 4 + 2] = grid.colors[i * 3 + 2]!;
+    colors[v * 4 + 3] = 1;
+    v++;
+  };
+  type P = readonly [number, number, number];
+  /** A triangle given so that its right-hand normal faces outward. */
+  const tri = (a: P, b: P, c: P): void => {
+    vertex(a[0], a[1], a[2]);
+    if (RIGHT_HANDED_FRONT) {
+      vertex(b[0], b[1], b[2]);
+      vertex(c[0], c[1], c[2]);
+    } else {
+      vertex(c[0], c[1], c[2]);
+      vertex(b[0], b[1], b[2]);
+    }
+  };
 
-/** The enemy outpost: a walled compound with gaps, two towers and a central bunker. */
-function buildOutpost(scene: Scene, zone: ZoneDef, area: FlatArea): void {
-  const wall = solidMaterial(scene, "outpostWall", 0.3, 0.29, 0.3);
-  const dark = solidMaterial(scene, "outpostDark", 0.48, 0.14, 0.18);
-  const { x, z } = area;
-  const half = 34;
-  const segs: BlockSpec[] = [
-    // South wall with a central gate gap.
-    { x: x - 22, z: z - half, size: [24, 7, 2] },
-    { x: x + 22, z: z - half, size: [24, 7, 2] },
-    // North wall.
-    { x, z: z + half, size: [68, 7, 2] },
-    // West wall with a gap, east wall solid.
-    { x: x - half, z: z - 18, size: [2, 7, 30] },
-    { x: x - half, z: z + 22, size: [2, 7, 24] },
-    { x: x + half, z, size: [2, 7, 68] },
-  ];
-  segs.forEach((s, i) => placeBlock(scene, zone, `outpostWall${i}`, s, wall));
-  placeBlock(scene, zone, "towerA", { x: x - half, z: z - half, size: [6, 16, 6] }, dark);
-  placeBlock(scene, zone, "towerB", { x: x + half, z: z + half, size: [6, 16, 6] }, dark);
-  placeBlock(scene, zone, "bunker", { x, z: z + 8, size: [18, 6, 14] }, dark);
-  placeBlock(scene, zone, "bunkerTop", { x, z: z + 8, lift: 6, size: [8, 3, 6] }, wall);
-  placeBlock(scene, zone, "crateA", { x: x - 14, z: z - 12, size: [5, 4, 5], rotY: 0.4 }, wall);
-  placeBlock(scene, zone, "crateB", { x: x + 16, z: z - 16, size: [6, 5, 4], rotY: -0.3 }, wall);
-}
-
-/** Scattered hull plates and girders from an old battle; mid-field cover. */
-function buildWrecks(scene: Scene, zone: ZoneDef, area: FlatArea): void {
-  const rust = solidMaterial(scene, "rust", 0.36, 0.24, 0.18);
-  const rng = makeRng(zone.seed + 99);
-  for (let i = 0; i < 9; i++) {
-    const angle = rng() * Math.PI * 2;
-    const dist = rng() * area.radius * 0.85;
-    placeBlock(
-      scene,
-      zone,
-      `wreck${i}`,
-      {
-        x: area.x + Math.cos(angle) * dist,
-        z: area.z + Math.sin(angle) * dist,
-        lift: -1,
-        size: [4 + rng() * 9, 3 + rng() * 6, 1.5 + rng() * 3],
-        rotY: rng() * Math.PI,
-        tilt: (rng() - 0.5) * 0.7,
-      },
-      rust,
-    );
+  for (let iz = 0; iz < cells; iz++) {
+    for (let ix = 0; ix < cells; ix++) {
+      // (z, x) order gives a normal pointing up.
+      tri([ix, iz, 0], [ix, iz + 1, 0], [ix + 1, iz, 0]);
+      tri([ix + 1, iz, 0], [ix, iz + 1, 0], [ix + 1, iz + 1, 0]);
+    }
   }
-}
-
-function buildRocks(scene: Scene, zone: ZoneDef): void {
-  const rock = solidMaterial(scene, "rock", 0.44, 0.42, 0.4);
-  const rng = makeRng(zone.seed + 5);
-  const half = zone.size / 2 - 60;
-  const keepClear = [zone.playerBase, zone.enemyOutpost];
-  let placed = 0;
-  for (let attempt = 0; attempt < zone.rockCount * 4 && placed < zone.rockCount; attempt++) {
-    const x = (rng() * 2 - 1) * half;
-    const z = (rng() * 2 - 1) * half;
-    const s = 2 + rng() * 6;
-    const spec: BlockSpec = {
-      x,
-      z,
-      lift: -s * 0.3,
-      size: [s * (0.8 + rng() * 0.8), s, s * (0.8 + rng() * 0.8)],
-      rotY: rng() * Math.PI,
-      tilt: (rng() - 0.5) * 0.5,
-    };
-    if (keepClear.some((a) => Math.hypot(x - a.x, z - a.z) < a.radius + 8)) continue;
-    placeBlock(scene, zone, `rock${placed}`, spec, rock);
-    placed++;
+  const surfaceVertices = v;
+  for (let i = 0; i < cells; i++) {
+    // Each edge: a strip of quads facing away from the chunk.
+    const edges: [P, P, P, P][] = [
+      [[i, 0, 0], [i + 1, 0, 0], [i + 1, 0, skirt], [i, 0, skirt]],
+      [[i + 1, cells, 0], [i, cells, 0], [i, cells, skirt], [i + 1, cells, skirt]],
+      [[0, i + 1, 0], [0, i, 0], [0, i, skirt], [0, i + 1, skirt]],
+      [[cells, i, 0], [cells, i + 1, 0], [cells, i + 1, skirt], [cells, i, skirt]],
+    ];
+    for (const [a, b, c, d] of edges) {
+      tri(a, b, c);
+      tri(a, c, d);
+    }
   }
-}
 
-export function buildStructures(scene: Scene, zone: ZoneDef): void {
-  buildBase(scene, zone, zone.playerBase);
-  buildOutpost(scene, zone, zone.enemyOutpost);
-  buildWrecks(scene, zone, zone.wreckField);
-  buildRocks(scene, zone);
+  const indices = new Uint32Array(v);
+  for (let i = 0; i < v; i++) indices[i] = i;
+  const normals = new Float32Array(v * 3);
+  VertexData.ComputeNormals(positions, indices, normals);
+  // Light the skirt like the ground it hangs from, so where it does show (and along the shared
+  // edge of two chunks, where it can win the depth test by a hair) it cannot be told apart.
+  let s = surfaceVertices * 3;
+  for (let i = 0; i < cells; i++) {
+    for (const cell of [i, (cells - 1) * cells + i, i * cells, i * cells + cells - 1]) {
+      for (let k = 0; k < 6; k++, s += 3) normals.set(normals.subarray(cell * 18, cell * 18 + 3), s);
+    }
+  }
+
+  const mesh = new Mesh(`chunk ${cx},${cz}`, scene);
+  const data = new VertexData();
+  data.positions = positions;
+  data.indices = indices;
+  data.normals = normals;
+  data.colors = colors;
+  data.applyToMesh(mesh);
+  mesh.material = material;
+  mesh.isPickable = false;
+  // Static geometry: skip the per-frame world matrix work.
+  mesh.freezeWorldMatrix();
+  mesh.doNotSyncBoundingInfo = true;
+  return mesh;
 }

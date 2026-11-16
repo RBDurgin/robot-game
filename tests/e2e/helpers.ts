@@ -40,3 +40,18 @@ export const playerState = (page: Page) =>
       torso: p.health.sections.torso.armor + p.health.sections.torso.structure,
     };
   });
+
+/**
+ * Put the player down a short way south of the first outpost and wait for its garrison to wake:
+ * enemies are only in the scene while the player is near them.
+ */
+export async function approachOutpost(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window.__game!.world;
+    const post = w.missionOutpost;
+    const x = post.x - 60;
+    const z = post.z - 150;
+    w.player.teleport({ x, y: w.heightAt(x, z) + 2, z }, 0);
+  });
+  await page.waitForFunction(() => window.__game!.world.enemies.length === 5, undefined, { timeout: 60_000 });
+}

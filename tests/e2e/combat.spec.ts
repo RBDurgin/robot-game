@@ -1,10 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { boot, playerState, SHOTS, startGame, waitTicks } from "./helpers";
+import { approachOutpost, boot, playerState, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("player can shoot and destroy an enemy; enemies fight back", async ({ page }) => {
   const errors = await boot(page);
   await startGame(page);
   await waitTicks(page, 30);
+
+  // Enemies far from the player are asleep: at the base, nobody else is in the scene.
+  expect(await page.evaluate(() => window.__game!.world.mechs.length)).toBe(1);
+  await approachOutpost(page);
 
   // Drop the player 70 m from the first picket mech and keep the crosshair on it.
   const setup = await page.evaluate(() => {

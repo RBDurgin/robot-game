@@ -161,6 +161,27 @@ export class MechEntity {
     s.legsYaw = s.torsoYaw = yaw;
   }
 
+  /**
+   * Keep the mech within `limit` metres of the world's centre on both axes.
+   * Returns true if it had to be moved back.
+   */
+  confine(limit: number): boolean {
+    const p = this.controller.getPosition();
+    const x = Math.min(limit, Math.max(-limit, p.x));
+    const z = Math.min(limit, Math.max(-limit, p.z));
+    if (x === p.x && z === p.z) return false;
+    this.controller.setPosition(new Vector3(x, p.y, z));
+    this.feet.x = x;
+    this.feet.z = z;
+    return true;
+  }
+
+  /** Take on damage carried over from an earlier life in the scene (see `MechRecord`). */
+  adoptHealth(health: Health): void {
+    this.health = health;
+    for (const arm of ["armL", "armR"] as const) this.visual.setArmVisible(arm, !health.sections[arm].destroyed);
+  }
+
   /** Restore to factory condition (used on respawn and when repairing at base). */
   restore(): void {
     repairAll(this.health);

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { boot, SHOTS, startGame, waitTicks } from "./helpers";
+import { approachOutpost, boot, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("mission loop: clear outpost, salvage, return, refit in hangar, progress is saved", async ({ page }) => {
   const errors = await boot(page);
@@ -30,6 +30,7 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   expect(await page.evaluate(() => window.__game!.world.mode)).toBe("playing");
 
   // Destroy the garrison (through the real damage path) and check each leaves salvage.
+  await approachOutpost(page);
   await page.evaluate(() => {
     const w = window.__game!.world;
     for (const enemy of w.enemies) w.combat.damage(enemy, "torso", 100_000, w.player);
@@ -37,7 +38,8 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   await waitTicks(page, 3);
   const cleared = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { phase: w.phase, kills: w.kills, crates: w.salvage.count, mechs: w.mechs.length };
+    // Crates dropped by mechs; caches lying at sites nearby are counted separately.
+    return { phase: w.phase, kills: w.kills, crates: w.salvage.countAt(null), mechs: w.mechs.length };
   });
   expect(cleared).toEqual({ phase: "return", kills: 5, crates: 5, mechs: 1 });
 
@@ -45,14 +47,14 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   for (let i = 0; i < 5; i++) {
     await page.evaluate(() => {
       const w = window.__game!.world;
-      const p = w.salvage.positions[0]!;
+      const p = w.salvage.positionsAt(null)[0]!;
       w.player.teleport({ x: p.x, y: p.y, z: p.z }, 0);
     });
     await waitTicks(page, 3);
   }
   const looted = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { crates: w.salvage.count, scrap: w.save.scrap, items: w.itemsSalvaged, inventory: w.save.inventory };
+    return { crates: w.salvage.countAt(null), scrap: w.save.scrap, items: w.itemsSalvaged, inventory: w.save.inventory };
   });
   expect(looted.crates).toBe(0);
   expect(looted.scrap).toBeGreaterThanOrEqual(5 * 12);
@@ -62,7 +64,7 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   // Returning to base completes the mission.
   await page.evaluate(() => {
     const w = window.__game!.world;
-    const b = w.zone.playerBase;
+    const b = w.homeBase;
     w.player.teleport({ x: b.x + 8, y: w.player.feet.y + 40, z: b.z + 8 }, 0);
   });
   await expect(page.getByRole("heading", { name: "Outpost cleared" })).toBeVisible({ timeout: 60_000 });

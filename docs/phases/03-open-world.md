@@ -1,6 +1,6 @@
 # Phase 3: Open world
 
-**Status: not started.** Size: 3 to 4 sessions. Depends on: phase 1.
+**Status: done.** Size: 3 to 4 sessions. Depends on: phase 1.
 
 ## Goal
 
@@ -52,16 +52,68 @@ Territory ownership and off-screen battles (phase 4). Region-based difficulty an
 - At least four biomes and a dozen points of interest.
 - Map and fast travel work; position and discoveries persist.
 
+## Decisions
+
+- World size: 8192 m square (32 x 32 chunks).
+- Content: generated terrain and scatter, 14 hand-placed key sites, 20 minor sites from seeded rules.
+- Edge: a mountain rim. Mechs are also stopped 230 m short of the edge, high on the rim, for
+  anyone who jets up it.
+
+## What the prototype found
+
+Measured in headless Chromium in the dev container (CPU work, so the numbers carry over):
+
+| Collider for one chunk | Create | Remove |
+|---|---|---|
+| Triangle mesh, 256 m, 40 x 40 cells | 7.1 ms (max 10.6) | 0.06 ms |
+| Triangle mesh, 512 m, 128 x 128 cells | 80 ms (max 143) | 0.06 ms |
+| Heightfield, 256 m, 40 x 40 cells | 0.15 ms | 0.02 ms |
+| Heightfield, 512 m, 128 x 128 cells | 0.54 ms | 0.02 ms |
+
+So terrain colliders are Havok heightfields, and the cost of a chunk is sampling its heights
+(about 2.5 ms for 41 x 41 samples) and building its mesh, not physics. Chunk size 256 m keeps
+each of those jobs small. The row order Havok wants is not the obvious one; `addHeightfieldCollider`
+in `src/game/physics.ts` has the layout that was checked against ray hits.
+
+In the e2e run the longest single streaming job while sprinting was about 10 to 12 ms on the
+container's CPU, and loading everything around the start point takes 300 to 400 ms. Neither says
+what a real machine does; that is the traversal check below.
+
+## How it is built
+
+- `src/data/world.ts`: regions, key sites, placement rules. `src/data/biomes.ts`: the four biomes.
+  `src/data/streaming.ts`: every streaming distance and the per-frame budget.
+- `src/sim/terrain.ts`: `sampleTerrain` is the terrain's shape; `heightAt` is the ground, which is
+  that shape sampled on the 6.4 m grid the meshes and colliders are built from. They differ by up
+  to a couple of metres on sharp crests, so gameplay asks `heightAt`.
+- `src/sim/chunks.ts`: which chunks should be loaded at what detail (pure, with hysteresis), and
+  each chunk's scatter. `src/sim/worldgen.ts`: seeded site placement.
+- `src/sim/population.ts`: sleeping mech records and the wake and sleep rule.
+- `src/game/terrainStream.ts`: builds and removes what the planner asks for, a few milliseconds
+  per frame, nearest first. A teleport loads the surroundings at once.
+- `src/view/mapView.ts` and `Screens.showMap`: the world map.
+
 ## Checklist
 
-- [ ] World size and content balance agreed
-- [ ] Collider streaming prototype measured; chunk size chosen: ______
-- [ ] World height function with tests
-- [ ] Chunked terrain loading and unloading
-- [ ] Biomes
-- [ ] Points of interest
-- [ ] Entity streaming
-- [ ] Map screen and fast travel
-- [ ] Position and discoveries saved
-- [ ] Real-browser traversal check
-- [ ] User playtest and sign-off
+- [x] World size and content balance agreed
+- [x] Collider streaming prototype measured; chunk size chosen: 256 m, heightfield colliders
+- [x] World height function with tests
+- [x] Chunked terrain loading and unloading
+- [x] Biomes
+- [x] Points of interest
+- [x] Entity streaming
+- [x] Map screen and fast travel
+- [x] Position and discoveries saved
+- [x] Real-browser traversal check
+- [x] User playtest and sign-off
+
+## Traversal check (2026-11-16)
+
+Fourteen profiles from the user's machine (Chrome, Radeon Pro 5300M, 1792 x 1003 at 2x), about
+8,200 frames of travel at a steady 60 fps. Hitch threshold: no frame over 33 ms while travelling.
+
+- No frame over 33 ms. The five slowest were 26 to 33 ms and none of them did streaming work.
+- Streaming ran in 211 frames: median 3.4 ms, 99th percentile 6.2 ms, worst 6.7 ms, up to 18 jobs
+  in a frame. All inside a 16.7 ms frame.
+- Not covered by these runs: fights (no enemy woke and nothing was destroyed), and the one-off
+  load on fast travel and respawn, which happens outside the measured frames.

@@ -1,7 +1,8 @@
 # Robot Game
 
-3D mech combat game: Babylon.js + TypeScript, runs in the browser via Vite. Currently one zone,
-three playable frames (light, medium, heavy) and one enemy faction.
+3D mech combat game: Babylon.js + TypeScript, runs in the browser via Vite. Currently an 8 km
+streamed open world with four biomes, three playable frames (light, medium, heavy) and one enemy
+faction.
 
 The roadmap is in `docs/roadmap.md`, with one document per phase in `docs/phases/`. Before starting
 work, read the roadmap and the document for the current phase, and settle that phase's "Decide
@@ -23,11 +24,14 @@ Run `npm run check` after any gameplay change, and look at the screenshots.
 
 Three layers with a strict dependency direction: `sim` knows nothing about Babylon.
 
-- `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, loot).
+- `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, loot,
+  terrain shape, chunk planning, site placement, sleeping mech records).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
-- `src/game/`: Babylon integration (world, physics, input, mech entity, combat, camera, save).
+- `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
+  camera, save).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
-- `src/data/`: everything tunable (frames, weapons, plating, factions, encounters, loot, zone).
+- `src/data/`: everything tunable (frames, weapons, plating, factions, garrisons, loot, the world
+  with its regions and sites, biomes, site layouts, streaming distances).
   Prefer changing data over changing code.
 
 Key seams:
@@ -40,9 +44,26 @@ Key seams:
 - Hardpoints: a `Loadout` maps hardpoint ids to weapons. Each hardpoint names the trigger that
   fires it and the section that carries it, so combat and the hangar loop over
   `frame.hardpoints` rather than naming arms.
+- `WorldModel` (`src/sim/terrain.ts`): the world definition plus its generated sites, built once.
+  Terrain meshes, colliders, spawns and the map are all pure functions of it.
+- `TerrainStreamer` (`src/game/terrainStream.ts`): loads and unloads chunks around the player on a
+  per-frame time budget. What to load is decided by the pure planner in `src/sim/chunks.ts`.
+- `MechRecord` (`src/sim/population.ts`): every enemy pilot in the world. `World.mechs` holds only
+  the ones awake near the player; `World.population` holds all of them.
 
 ## Things that are easy to get wrong
 
+- Ask `heightAt` for where the ground is, never `sampleTerrain`. The ground is the terrain shape
+  sampled on a 6.4 m grid, and on sharp crests it is a metre or two below the shape itself.
+- Terrain exists only near the player. Anything placed far away (a mech, a crate) has no ground
+  under it until its chunk loads: check `terrain.hasGround` first. Moving the player with
+  `player.teleport` is safe: the surroundings are loaded before physics next runs.
+- Enemies are asleep (not in `World.mechs`) until the player is within `STREAM.mechWake` metres.
+  Tests that need enemies go near them first (`approachOutpost` in `tests/e2e/helpers.ts`).
+- Streaming distances in `src/data/streaming.ts` depend on each other: fog must end inside the
+  loaded terrain and colliders must reach past the mech sleep distance. Unit tests check both.
+- Terrain colliders are Havok heightfields, whose row order is not the obvious one; use
+  `addHeightfieldCollider` rather than building one by hand.
 - Mech character controllers own a Havok body. "World" raycasts must use the collision layers in
   `src/game/physics.ts` (`raycastWorld`), or they stop on mech capsules. Mech hits are resolved
   analytically in `src/sim/hit.ts`.
@@ -58,8 +79,9 @@ Key seams:
 - The player's `MechEntity` is replaced when the frame changes in the hangar, so do not hold on
   to `world.player` across a deploy.
 - Beam weapons give `damage` and `heat` per second, not per shot.
-- Saves written before phase 2 have `armL`/`armR` in the loadout and no frame. `parseSave` in
-  `src/game/save.ts` reads both shapes; keep it that way when the save format changes again.
+- Saves written before phase 2 have `armL`/`armR` in the loadout and no frame, and saves from
+  before phase 3 have no position or world progress. `parseSave` in `src/game/save.ts` reads all
+  of these; keep it that way when the save format changes again.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 
@@ -68,6 +90,9 @@ Key seams:
 Backquote (`) toggles a stats overlay and live sliders for the player frame's handling values.
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating.
+
+M opens the world map. From the browser console, `__game.world.player.teleport({x, y, z}, 0)`
+goes anywhere (use `__game.world.heightAt(x, z)` for `y`).
 
 Profiling: open the game with `?profile` in the URL. It records per-frame timings and counters
 (`src/game/perf.ts`) and the dev server saves them to `perf/` (ignored by git) each time a menu

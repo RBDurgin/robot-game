@@ -87,11 +87,13 @@ async function boot(): Promise<void> {
       debugAge = 0;
       const p = world.player.feet;
       const s = world.player.state;
+      const stream = world.terrain.stats;
       debugEl.textContent =
         `fps   ${stats.summary()}\n` +
         `pos   ${p.x.toFixed(0)} ${p.y.toFixed(1)} ${p.z.toFixed(0)}\n` +
         `speed ${world.player.horizontalSpeed.toFixed(1)} m/s ${s.grounded ? "ground" : "air"}\n` +
-        `view  ${world.cameraRig.mode}` +
+        `view  ${world.cameraRig.mode}\n` +
+        `world ${world.region.name} · ${stream.chunks} chunks (${stream.colliders} solid, ${stream.queued} queued) · ${world.enemies.length}/${world.population.filter((r) => r.alive).length} mechs awake` +
         (PROFILING ? `\nperf  ${perfFrameCount()} frames recorded${perfStatus ? ` · ${perfStatus}` : ""}` : "");
     }
     if (PROFILING) {
@@ -113,6 +115,10 @@ async function boot(): Promise<void> {
               enemies: world.enemies.length,
               fighting: world.enemies.filter((m) => m.brain?.state.mode !== "patrol").length,
               effects: world.effects.activeCount,
+              // Streaming: what is loaded, what is waiting, and how many jobs ran this frame.
+              chunks: world.terrain.stats.chunks,
+              queued: world.terrain.stats.queued,
+              streamJobs: world.terrain.lastJobs,
             }
           : null,
       );

@@ -17,6 +17,22 @@ export interface SaveData {
   inventory: Inventory;
   scrap: number;
   settings: Settings;
+  /** Where the player was last, or null to start at the home base. */
+  position: SavedPosition | null;
+  /** Ids of sites the player has found. They show on the map. */
+  discovered: string[];
+  /** Ids of bases the player has taken, besides those held from the start. */
+  held: string[];
+  /** Ids of sites whose garrison has been destroyed. */
+  cleared: string[];
+  /** Ids of sites whose salvage cache has been taken. */
+  looted: string[];
+}
+
+export interface SavedPosition {
+  x: number;
+  z: number;
+  yaw: number;
 }
 
 const KEY = "robot-game-save-v1";
@@ -30,6 +46,11 @@ export function freshSave(): SaveData {
     inventory: startingInventory(STARTING_LOADOUT),
     scrap: 0,
     settings: { ...DEFAULT_SETTINGS },
+    position: null,
+    discovered: [],
+    held: [],
+    cleared: [],
+    looted: [],
   };
 }
 
@@ -48,6 +69,11 @@ function parseLoadout(raw: unknown): Loadout | null {
     if (isWeaponId(weapon)) weapons[id] = weapon;
   }
   return { weapons, plating: l.plating };
+}
+
+/** A list of ids, dropping anything that is not a string and any repeats. */
+function parseIds(raw: unknown): string[] {
+  return Array.isArray(raw) ? [...new Set(raw.filter((v): v is string => typeof v === "string"))] : [];
 }
 
 /** Build a save from stored data, keeping whatever is valid and defaulting the rest. */
@@ -80,6 +106,16 @@ export function parseSave(raw: unknown): SaveData {
     if (typeof s.volume === "number") save.settings.volume = Math.min(1, Math.max(0, s.volume));
     if (s.defaultView === "third" || s.defaultView === "cockpit") save.settings.defaultView = s.defaultView;
   }
+  // Saves from before the open world have none of these: the player starts at home with
+  // nothing found. Ids are checked against the world when they are used.
+  const p = data.position as Partial<SavedPosition> | null | undefined;
+  if (p && typeof p === "object" && [p.x, p.z, p.yaw].every((v) => typeof v === "number" && Number.isFinite(v))) {
+    save.position = { x: p.x!, z: p.z!, yaw: p.yaw! };
+  }
+  save.discovered = parseIds(data.discovered);
+  save.held = parseIds(data.held);
+  save.cleared = parseIds(data.cleared);
+  save.looted = parseIds(data.looted);
   return save;
 }
 

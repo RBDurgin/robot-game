@@ -54,6 +54,17 @@
       .frames .selected { background: #1d2530; color: #fff; }
       .frames thead .selected { color: #f0a55a; }
       .inventory { margin: 0; padding-left: 18px; columns: 2; color: #c3ccd6; }
+      .panel.mapPanel { width: min(1040px, 100%); }
+      .mapBody { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 20px; align-items: start; }
+      .map { width: 100%; aspect-ratio: 1; border: 1px solid #2c3540; border-radius: 4px; display: block; }
+      .mapSide .dim { color: #9aa6b3; font-size: 13px; }
+      .travel { display: grid; gap: 6px; }
+      .travel button { text-align: left; padding: 6px 10px; }
+      .travel button:disabled { color: #6b7684; border-color: #2a323c; cursor: not-allowed; }
+      .places { margin: 0; padding-left: 18px; font-size: 13px; color: #c3ccd6; max-height: 220px; overflow: auto; }
+      .places .held { color: #39c2ff; }
+      .places .hostile { color: #ff8a7a; }
+      @media (max-width: 760px) { .mapBody { grid-template-columns: 1fr; } }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
       button { font: inherit; padding: 8px 16px; border-radius: 5px; border: 1px solid transparent; cursor: pointer; }
       button.primary { background: #c9772b; color: #fff; font-weight: 600; }

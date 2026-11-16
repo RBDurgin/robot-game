@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { boot, SHOTS, startGame, waitTicks } from "./helpers";
+import { approachOutpost, boot, SHOTS, startGame, waitTicks } from "./helpers";
 
 test("frames: three silhouettes, switch frame in the hangar, abilities and shoulder weapons work", async ({ page }) => {
   // ?arsenal stocks the hangar with every weapon.
@@ -7,11 +7,19 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   await startGame(page);
   await waitTicks(page, 60);
 
-  // Line up one enemy of each frame in front of the player, with their pilots switched off.
-  const lineup = await page.evaluate(() => {
+  // Enemies are only in the scene near the player: visit the outpost to wake its garrison,
+  // then bring one of each frame back to the base with their pilots switched off.
+  const spawn = await page.evaluate(() => {
+    const p = window.__game!.world.player;
+    return { x: p.feet.x, y: p.feet.y, z: p.feet.z, yaw: p.state.torsoYaw };
+  });
+  await approachOutpost(page);
+  const lineup = await page.evaluate((spawn) => {
     const w = window.__game!.world;
+    w.player.teleport({ x: spawn.x, y: spawn.y + 0.2, z: spawn.z }, spawn.yaw);
+    w.intentOverride = { aimYaw: spawn.yaw };
     const p = w.player.feet;
-    const yaw = w.player.state.torsoYaw;
+    const yaw = spawn.yaw;
     const picked = ["light", "medium", "heavy"].map((id) => w.enemies.find((m) => m.frame.id === id)!);
     picked.forEach((mech, i) => {
       mech.brain = null;
@@ -20,12 +28,14 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
       const z = p.z + Math.cos(yaw) * 16 - Math.sin(yaw) * side - Math.sin(yaw) * 2.2;
       mech.teleport({ x, y: p.y, z }, yaw + Math.PI);
     });
-    w.intentOverride = { aimPitch: -0.12 };
+    w.intentOverride = { aimYaw: spawn.yaw, aimPitch: -0.12 };
     return picked.map((m) => ({ frame: m.frame.id, height: m.frame.height, shoulders: m.mounted.filter((x) => x.hardpoint.mount === "shoulder").length }));
-  });
+  }, spawn);
   expect(lineup.map((m) => m.frame)).toEqual(["light", "medium", "heavy"]);
   expect(lineup[2]!.shoulders).toBe(2);
   await waitTicks(page, 10);
+  // The two left behind at the outpost are asleep again; the three brought along stay awake.
+  expect(await page.evaluate(() => window.__game!.world.enemies.length)).toBe(3);
   await page.screenshot({ path: `${SHOTS}/11-three-frames.png` });
 
   // Hangar: the medium frame has two arm mounts and no shoulders.
@@ -117,7 +127,7 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   // Back to the hangar for the light frame: the shoulder weapons come off with the mounts.
   await page.evaluate(() => {
     const w = window.__game!.world;
-    const b = w.zone.playerBase;
+    const b = w.homeBase;
     w.player.teleport({ x: b.x, y: w.player.feet.y + 1, z: b.z }, 0);
   });
   await waitTicks(page, 30);

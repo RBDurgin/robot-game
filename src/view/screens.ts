@@ -3,6 +3,8 @@ import type { Loadout } from "../data/loadouts";
 import { PLATING, type PlatingId } from "../data/parts";
 import { WEAPONS, type WeaponId } from "../data/weapons";
 import type { Settings } from "../game/save";
+import type { WorldModel } from "../sim/terrain";
+import { drawMap, type MapSite } from "./mapView";
 import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type Inventory, type ItemId } from "../sim/loadout";
 
 type Child = Node | string;
@@ -31,7 +33,8 @@ const CONTROLS: [string, string][] = [
   ["E / Middle mouse", "Fire shoulder weapons (heavy frame)"],
   ["F", "Melee strike"],
   ["V", "Switch third-person / cockpit view"],
-  ["H", "Hangar (at base)"],
+  ["H", "Hangar (at a base you hold)"],
+  ["M", "World map and fast travel"],
   ["Esc", "Pause"],
 ];
 
@@ -51,6 +54,21 @@ export interface HangarOptions {
   inventory: Inventory;
   scrap: number;
   onDeploy(frame: FrameId, loadout: Loadout): void;
+}
+
+export interface MapOptions {
+  model: WorldModel;
+  player: { x: number; z: number; yaw: number };
+  /** Name of the region the player is in. */
+  region: string;
+  /** The places the player knows about. */
+  sites: MapSite[];
+  /** Number of places in the world, found or not. */
+  total: number;
+  /** Why fast travel is unavailable right now, or null if it is available. */
+  travelBlocked: string | null;
+  onTravel(siteId: string): void;
+  onClose(): void;
 }
 
 const FIRE_KEYS: Record<Trigger, string> = { primary: "LMB", secondary: "RMB", tertiary: "E" };
@@ -152,7 +170,7 @@ export class Screens {
       ...(opts.isStart
         ? [
             el("p", "", [
-              "The Kestrel Combine has fortified an outpost to the north-east. Clear out its garrison, salvage what they leave behind, and return to base.",
+              "The Kestrel Combine has fortified an outpost to the north-east. Clear out its garrison, salvage what they leave behind, and return to base. Beyond the basin lie the Marches: salt flats, highlands and ruined cities, with bases to take and places to find.",
             ]),
           ]
         : []),
@@ -266,6 +284,33 @@ export class Screens {
       if (focusFrame) frameSelect.querySelector("select")?.focus({ preventScroll: true });
     };
     render(false);
+  }
+
+  showMap(opts: MapOptions): void {
+    const canvas = el("canvas", "map");
+    canvas.width = canvas.height = 720;
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "World map");
+    drawMap(canvas, opts);
+
+    const bases = opts.sites.filter((s) => s.held);
+    const here = (s: MapSite): boolean => Math.hypot(opts.player.x - s.site.x, opts.player.z - s.site.z) < s.site.radius;
+    const travel = bases.map((s) => {
+      const b = button(`Travel to ${s.site.name}`, () => opts.onTravel(s.site.id), "secondary");
+      b.disabled = opts.travelBlocked !== null || here(s);
+      return b;
+    });
+    const known = [...opts.sites].sort((a, b) => a.site.name.localeCompare(b.site.name));
+    const side = el("div", "mapSide", [
+      el("p", "", [`You are in ${opts.region}.`]),
+      el("h2", "", ["Fast travel"]),
+      el("p", "dim", [opts.travelBlocked ?? "Travel to any base you hold."]),
+      el("div", "travel", travel),
+      el("h2", "", [`Places found · ${opts.sites.length} of ${opts.total}`]),
+      el("ul", "places", known.map((s) => el("li", s.held ? "held" : s.hostile ? "hostile" : "", [`${s.site.name}${s.held ? " (held)" : s.hostile ? " (hostile)" : ""}`]))),
+      el("div", "actions", [button("Close map", opts.onClose)]),
+    ]);
+    this.show(el("div", "panel mapPanel", [el("h1", "", [opts.model.def.name]), el("div", "mapBody", [canvas, side])]));
   }
 
   showComplete(summary: MissionSummary, onReplay: () => void, onContinue: () => void): void {

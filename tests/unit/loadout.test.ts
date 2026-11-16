@@ -3,7 +3,9 @@ import { FRAMES } from "../../src/data/frames";
 import { ENEMY_LOADOUTS, STARTING_LOADOUT, type Loadout } from "../../src/data/loadouts";
 import { PLATING } from "../../src/data/parts";
 import { WEAPONS } from "../../src/data/weapons";
-import { SLICE_SQUADS } from "../../src/data/encounters";
+import { GARRISONS, type SquadDef } from "../../src/data/encounters";
+
+const SQUADS: SquadDef[] = Object.values(GARRISONS).flat();
 import { addItem, fitToFrame, itemsUsed, loadoutProblems, loadoutStats, startingInventory } from "../../src/sim/loadout";
 import { rollLoot } from "../../src/sim/loot";
 import { makeRng } from "../../src/sim/math";
@@ -48,7 +50,7 @@ describe("loadout", () => {
   });
 
   it("every enemy in every squad carries a loadout its frame can deploy", () => {
-    for (const squad of SLICE_SQUADS) {
+    for (const squad of SQUADS) {
       for (const member of squad.members) {
         const loadout = ENEMY_LOADOUTS[member.loadout];
         expect(loadoutProblems(FRAMES[member.frame], loadout, itemsUsed(loadout)), `${squad.id} ${member.loadout}`).toEqual([]);
@@ -57,7 +59,7 @@ describe("loadout", () => {
   });
 
   it("squads field more than one frame", () => {
-    expect(new Set(SLICE_SQUADS.flatMap((s) => s.members.map((m) => m.frame))).size).toBeGreaterThan(1);
+    expect(new Set(SQUADS.flatMap((s) => s.members.map((m) => m.frame))).size).toBeGreaterThan(1);
   });
 });
 

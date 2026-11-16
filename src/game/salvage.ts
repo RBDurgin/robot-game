@@ -6,6 +6,8 @@ const PICKUP_RADIUS = 7;
 interface Crate {
   mesh: Mesh;
   drop: LootDrop;
+  /** Id of the site the crate belongs to, for crates that were lying there to be found. */
+  site: string | null;
 }
 
 /** Salvage crates left by destroyed mechs. Walk over one to collect it. */
@@ -36,22 +38,40 @@ export class SalvageField {
     mesh.dispose();
   }
 
-  spawn(at: Vector3, drop: LootDrop): void {
+  spawn(at: Vector3, drop: LootDrop, site: string | null = null): void {
     const mesh = MeshBuilder.CreateBox("salvageCrate", { size: 1.6 }, this.scene);
     mesh.position.copyFrom(at);
     mesh.material = this.material;
     mesh.isPickable = false;
-    this.crates.push({ mesh, drop });
+    this.crates.push({ mesh, drop, site });
+  }
+
+  /** Crates still lying at a site, or (for null) crates dropped by destroyed mechs. */
+  countAt(site: string | null): number {
+    return this.crates.reduce((n, c) => n + (c.site === site ? 1 : 0), 0);
+  }
+
+  positionsAt(site: string | null): Vector3[] {
+    return this.crates.filter((c) => c.site === site).map((c) => c.mesh.position);
+  }
+
+  /** Take away a site's uncollected crates (the site has streamed out). */
+  removeAt(site: string): void {
+    for (let i = this.crates.length - 1; i >= 0; i--) {
+      if (this.crates[i]!.site !== site) continue;
+      this.crates[i]!.mesh.dispose();
+      this.crates.splice(i, 1);
+    }
   }
 
   /** Remove and return every crate within reach of `feet`. */
-  collectNear(feet: Vector3): LootDrop[] {
-    const collected: LootDrop[] = [];
+  collectNear(feet: Vector3): { drop: LootDrop; site: string | null }[] {
+    const collected: { drop: LootDrop; site: string | null }[] = [];
     for (let i = this.crates.length - 1; i >= 0; i--) {
       const crate = this.crates[i]!;
       const p = crate.mesh.position;
       if (Math.hypot(p.x - feet.x, p.z - feet.z) < PICKUP_RADIUS && Math.abs(p.y - feet.y) < 8) {
-        collected.push(crate.drop);
+        collected.push({ drop: crate.drop, site: crate.site });
         crate.mesh.dispose();
         this.crates.splice(i, 1);
       }
