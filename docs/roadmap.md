@@ -10,7 +10,7 @@ The vertical slice (phase 0) is done. The phases below take it to a full game. E
 |---|---|---|---|---|---|
 | 0 | [Vertical slice](phases/00-vertical-slice.md) | One zone, one frame, one enemy faction, full mission loop | none | done | Done |
 | 1 | [Feel and foundations](phases/01-feel-and-foundations.md) | Tune by playtest, fix real-browser issues, tidy the repo | 0 | 1 to 2 | Done |
-| 2 | [Frames and arsenal](phases/02-frames-and-arsenal.md) | Light and heavy frames, new weapon families, enemy variety | 1 | 2 to 3 | Built, awaiting playtest |
+| 2 | [Frames and arsenal](phases/02-frames-and-arsenal.md) | Light and heavy frames, new weapon families, enemy variety | 1 | 2 to 3 | Done |
 | 3 | [Open world](phases/03-open-world.md) | Streaming terrain, biomes, points of interest, map, fast travel | 1 | 3 to 4 | Not started |
 | 4 | [Living faction war](phases/04-faction-war.md) | More factions, territory that changes hands, reputation | 3 | 3 to 4 | Not started |
 | 5 | [Progression and economy](phases/05-progression-and-economy.md) | Spend scrap, part tiers, unlocks, robust saves | 2 | 2 to 3 | Not started |

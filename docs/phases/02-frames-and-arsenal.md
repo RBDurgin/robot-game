@@ -1,6 +1,6 @@
 # Phase 2: Frames and arsenal
 
-**Status: built, waiting for the user playtest.** Size: 2 to 3 sessions. Depends on: phase 1.
+**Status: done.** Size: 2 to 3 sessions. Depends on: phase 1.
 
 ## Goal
 
@@ -76,8 +76,8 @@ Unlocking and buying frames (phase 5). Imported models (phase 7).
 ## Checklist
 
 - [x] Frame differences and abilities agreed
-- [x] Light frame data (numbers are first guesses: tune in the playtest)
-- [x] Heavy frame data (numbers are first guesses: tune in the playtest)
+- [x] Light frame data
+- [x] Heavy frame data
 - [x] Frame abilities in sim with tests
 - [x] Visual variants
 - [x] Hardpoint list replaces fixed arms
@@ -86,4 +86,4 @@ Unlocking and buying frames (phase 5). Imported models (phase 7).
 - [x] Guided missile and lock-on
 - [x] Mixed enemy squads and AI roles
 - [x] Hangar frame selection
-- [ ] User playtest and sign-off
+- [x] User playtest and sign-off
