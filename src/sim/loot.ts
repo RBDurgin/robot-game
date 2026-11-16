@@ -1,5 +1,7 @@
 import type { Loadout } from "../data/loadouts";
-import { CACHE_LOOT, LOOT, type LootTable } from "../data/lootTables";
+import type { WarFactionId } from "../data/factions";
+import { CACHE_LOOT, DANGER_LOOT, FACTION_LOOT, LOOT, type CacheTable, type LootTable } from "../data/lootTables";
+import type { Danger } from "../data/world";
 import type { PlatingId } from "../data/parts";
 import { rollSpec, type ItemSpec } from "./items";
 import { fittedWeapons, type ItemId } from "./loadout";
@@ -32,7 +34,7 @@ export function rollLoot(loadout: Loadout, rng: () => number, table: LootTable =
 }
 
 /** Roll the contents of one salvage crate found lying at a site. */
-export function rollCache(rng: () => number, table = CACHE_LOOT): LootDrop {
+export function rollCache(rng: () => number, table: CacheTable = CACHE_LOOT): LootDrop {
   const items: ItemSpec[] = [];
   if (rng() < table.itemChance) {
     const entries = Object.entries(table.itemWeights) as [ItemId, number][];
@@ -47,4 +49,17 @@ export function rollCache(rng: () => number, table = CACHE_LOOT): LootDrop {
     }
   }
   return { items, scrap: Math.round(table.scrapMin + rng() * (table.scrapMax - table.scrapMin)) };
+}
+
+/** The salvage table for a faction's wreck in a region of the given danger. */
+export function lootTableFor(faction: WarFactionId, danger: Danger): LootTable {
+  const table = { ...LOOT, ...FACTION_LOOT[faction] };
+  const { tierWeights, scrapScale } = DANGER_LOOT[danger];
+  return { ...table, tierWeights, scrapMin: Math.round(table.scrapMin * scrapScale), scrapMax: Math.round(table.scrapMax * scrapScale) };
+}
+
+/** The table for a crate lying in a region of the given danger. */
+export function cacheTableFor(danger: Danger): CacheTable {
+  const { tierWeights, scrapScale } = DANGER_LOOT[danger];
+  return { ...CACHE_LOOT, tierWeights, scrapMin: Math.round(CACHE_LOOT.scrapMin * scrapScale), scrapMax: Math.round(CACHE_LOOT.scrapMax * scrapScale) };
 }

@@ -81,6 +81,55 @@ test("economy: repairs are billed, parts are bought, fitted and sold, and it all
     const w = window.__game!.world;
     return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id, version: w.save.version, parts: w.save.inventory.map((item) => item.id).sort() };
   });
-  expect(reloaded).toEqual({ scrap: 0, armR: "pulseRifle", version: 2, parts: ["arcLauncher", "pulseRifle", "pulseRifle", "slugCannon", "standardPlating"] });
+  expect(reloaded).toEqual({ scrap: 0, armR: "pulseRifle", version: 3, parts: ["arcLauncher", "pulseRifle", "pulseRifle", "slugCannon", "standardPlating"] });
+  expect(errors).toEqual([]);
+});
+
+test("unlocks: frames and mounts are earned with scrap, a milestone and a faction's trust", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("robot-game-save-v1")) {
+      localStorage.setItem("robot-game-save-v1", JSON.stringify({ version: 3, scrap: 1000, cleared: ["kestrel-outpost", "pan-relay"] }));
+    }
+  });
+  const errors = await boot(page);
+  await startGame(page);
+  await page.evaluate(() => (window.__game!.world.warPaused = true));
+  await page.keyboard.press("KeyH");
+  await expect(page.getByRole("heading", { name: "Upgrades" })).toBeVisible();
+
+  // Only the medium frame to begin with. The heavy needs a third site cleared.
+  await expect(page.locator("select").and(page.getByLabel("Frame")).locator("option:disabled")).toHaveText(["Kite (light) · locked", "Bastion (heavy) · locked"]);
+  await expect(page.getByRole("button", { name: /^Unlock Kite frame/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Unlock Bastion frame/ })).toBeDisabled();
+  await expect(page.getByText("Clear 3 sites (2 so far).")).toBeVisible();
+  await page.getByRole("heading", { name: "Upgrades" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOTS}/22-upgrades.png` });
+  await page.getByRole("button", { name: /Repair and deploy/ }).click();
+
+  // The milestone and the trust arrive; back at the hangar both can be bought.
+  await page.evaluate(() => {
+    const w = window.__game!.world;
+    w.save.cleared.push("sunken-bastion");
+    w.save.standing.wardens = 75;
+  });
+  await page.keyboard.press("KeyH");
+  await expect(page.getByRole("button", { name: /^Unlock Shoulder mounts/ })).toBeDisabled();
+  await page.getByRole("button", { name: /^Unlock Bastion frame/ }).click();
+  await page.locator("select").and(page.getByLabel("Frame")).selectOption("heavy");
+  await expect(page.locator("select").and(page.getByLabel("Right shoulder"))).toBeDisabled();
+  await page.getByRole("button", { name: /^Unlock Shoulder mounts/ }).click();
+  await expect(page.getByRole("heading", { name: "Your parts · 50 scrap" })).toBeVisible();
+  await fitPart(page, "Right shoulder", "arcLauncher");
+  await page.screenshot({ path: `${SHOTS}/23-unlocked-heavy.png` });
+  await page.getByRole("button", { name: /Repair and deploy/ }).click();
+  await waitTicks(page, 5);
+
+  await page.reload();
+  await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
+  const reloaded = await page.evaluate(() => {
+    const w = window.__game!.world;
+    return { frame: w.player.frame.id, shoulder: w.player.weapons.shoulderR?.def.id, armL: w.player.weapons.armL?.def.id ?? null, unlocks: w.save.unlocks, scrap: w.save.scrap };
+  });
+  expect(reloaded).toEqual({ frame: "heavy", shoulder: "arcLauncher", armL: null, unlocks: ["heavyFrame", "shoulderMounts"], scrap: 50 });
   expect(errors).toEqual([]);
 });

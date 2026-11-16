@@ -104,6 +104,10 @@ Key seams:
 - The player's `MechEntity` is replaced when the frame changes in the hangar, so do not hold on
   to `world.player` across a deploy.
 - Beam weapons give `damage` and `heat` per second, not per shot.
+- A new save has only the medium frame. Tests that need another frame or shoulder mounts use
+  `?arsenal` (which unlocks everything) or put ids in `save.unlocks`.
+- Enemy strength and loot quality follow the `danger` of the region a pilot's site is in. The
+  home base and the first outpost must stay in a danger 1 region; a unit test checks it.
 - Repairs cost scrap (`src/sim/economy.ts`), on respawn and on deploying from a hangar. Tests that
   compare scrap across either must allow for the bill.
 - The hangar's shop changes `save.scrap` and `save.inventory` in place while the bench build is
@@ -123,7 +127,8 @@ Key seams:
 
 Backquote (`) toggles a stats overlay and live sliders for the player frame's handling values.
 
-Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating.
+Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
+and unlock every frame and mount.
 
 M opens the world map, which shows who holds what and the player's standing. From the console,
 `__game.world.war` is the war's state and `__game.world.save.standing.wardens = 50` changes a

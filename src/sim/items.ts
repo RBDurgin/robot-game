@@ -178,6 +178,8 @@ export interface RollOdds {
   tierWeights: [number, number, number];
   modChance: number;
   secondModChance: number;
+  /** Relative odds of each modifier; unlisted ones count as 1. */
+  modWeights?: Partial<Record<ModId, number>>;
 }
 
 /** Roll the tier and modifiers of a part that has dropped. */
@@ -196,7 +198,17 @@ export function rollSpec(id: ItemId, rng: () => number, odds: RollOdds): ItemSpe
   const chosen: ModId[] = [];
   for (const chance of [odds.modChance, odds.secondModChance]) {
     if (pool.length === 0 || rng() >= chance) break;
-    chosen.push(...pool.splice(Math.min(pool.length - 1, Math.floor(rng() * pool.length)), 1));
+    const weight = (m: ModId): number => odds.modWeights?.[m] ?? 1;
+    let at = rng() * pool.reduce((sum, m) => sum + weight(m), 0);
+    let index = pool.length - 1;
+    for (let i = 0; i < pool.length; i++) {
+      at -= weight(pool[i]!);
+      if (at < 0) {
+        index = i;
+        break;
+      }
+    }
+    chosen.push(...pool.splice(index, 1));
   }
   return { id, tier, mods: MOD_IDS.filter((m) => chosen.includes(m)) };
 }

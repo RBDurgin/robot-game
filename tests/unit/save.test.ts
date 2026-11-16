@@ -27,6 +27,7 @@ describe("parseSave", () => {
   it("round-trips the current format", () => {
     const save = freshSave();
     save.frame = "heavy";
+    save.unlocks = ["heavyFrame", "shoulderMounts"];
     save.inventory = [];
     save.fit = fitFromLoadout({ weapons: { armR: "lanceBeam", shoulderL: "seekerRack" }, plating: "heavyPlating" }, save.inventory);
     addItem(save.inventory, { id: "seekerRack", tier: 3, mods: ["cooled", "light"] });

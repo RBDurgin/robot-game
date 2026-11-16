@@ -1,8 +1,10 @@
-import { HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
+import { FRAMES, HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
 import { addItem, findItem, fitFromLoadout, isPlatingItem, isWeaponItem, parseSpec, plainSpec, type Fit, type Inventory, type Item } from "../sim/items";
 import { isPlatingId, isWeaponId } from "../sim/loadout";
 import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
+import { frameUnlocked, isUnlockId, mountUnlocked, unlocksUsed } from "../sim/unlocks";
+import type { UnlockId } from "../data/unlocks";
 import type { WarState } from "../sim/war";
 
 export interface Settings {
@@ -19,8 +21,9 @@ export interface Settings {
  * `MIGRATIONS`, so any old save is brought forward one version at a time.
  *
  * 2: parts are individual items with a tier and modifiers; the loadout became a `fit` of them.
+ * 3: frames and shoulder mounts have to be unlocked.
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 export interface SaveData {
   version: number;
@@ -31,6 +34,8 @@ export interface SaveData {
   /** Every part the player owns, fitted ones included. */
   inventory: Inventory;
   scrap: number;
+  /** Frames and mounts the player has earned the use of. */
+  unlocks: UnlockId[];
   settings: Settings;
   /** Where the player was last, or null to start at the home base. */
   position: SavedPosition | null;
@@ -70,6 +75,7 @@ export function freshSave(): SaveData {
     fit: fitFromLoadout(STARTING_LOADOUT, inventory),
     inventory,
     scrap: 0,
+    unlocks: [],
     settings: { ...DEFAULT_SETTINGS },
     position: null,
     discovered: [],
@@ -122,8 +128,17 @@ function toItems(data: Record<string, unknown>): void {
   delete data.loadout;
 }
 
+/**
+ * Version 2 to 3: there were no locks, so a pilot already on another frame, or with weapons on
+ * their shoulders, keeps the use of what they have. Anything else is still to be earned.
+ */
+function toUnlocks(data: Record<string, unknown>): void {
+  const slots = ((data.fit as { weapons?: unknown } | undefined)?.weapons ?? {}) as Record<string, unknown>;
+  data.unlocks = isFrameId(data.frame) ? unlocksUsed(data.frame, slots) : [];
+}
+
 /** `MIGRATIONS[n]` turns version n data into version n + 1, in place. */
-const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems };
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks };
 
 /** A copy of stored data brought up to the current version. */
 export function migrateSave(raw: Record<string, unknown>): Record<string, unknown> {
@@ -165,9 +180,12 @@ export function parseSave(raw: unknown): SaveData {
   const save = freshSave();
   if (!raw || typeof raw !== "object") return save;
   const data = migrateSave(raw as Record<string, unknown>);
+  save.unlocks = Array.isArray(data.unlocks) ? [...new Set(data.unlocks.filter(isUnlockId))] : [];
   // Saves from before there was a choice of frame have none: they were all medium.
-  if (isFrameId(data.frame)) save.frame = data.frame;
+  if (isFrameId(data.frame) && frameUnlocked(save.unlocks, data.frame)) save.frame = data.frame;
   Object.assign(save, parseParts(data));
+  // Nothing stays on a mount the player has no use of.
+  for (const h of FRAMES[save.frame].hardpoints) if (!mountUnlocked(save.unlocks, h.mount)) delete save.fit.weapons[h.id];
   if (typeof data.scrap === "number" && data.scrap >= 0) save.scrap = Math.floor(data.scrap);
   const s = data.settings as Partial<Settings> | undefined;
   if (s && typeof s === "object") {

@@ -116,7 +116,7 @@ describe("rollLoot", () => {
   });
 
   it("respects drop chances at the extremes", () => {
-    const never = { weaponChance: 0, platingChance: 0, platingWeights: { lightPlating: 1, standardPlating: 0, heavyPlating: 1 }, scrapMin: 5, scrapMax: 5, tierWeights: [1, 0, 0] as [number, number, number], modChance: 0, secondModChance: 0 };
+    const never = { weaponChance: 0, platingChance: 0, platingWeights: { lightPlating: 1, standardPlating: 0, heavyPlating: 1 }, scrapMin: 5, scrapMax: 5, tierWeights: [1, 0, 0] as [number, number, number], modChance: 0, secondModChance: 0, modWeights: {} };
     expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), never)).toEqual({ items: [], scrap: 5 });
     const always = { ...never, weaponChance: 1 };
     expect(rollLoot(ENEMY_LOADOUTS.trooper, makeRng(1), always).items.map((i) => i.id)).toEqual(["pulseRifle", "arcLauncher"]);

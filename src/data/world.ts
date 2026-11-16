@@ -39,6 +39,9 @@ export interface SiteDef {
   cache?: number;
 }
 
+/** How dangerous a region is: 1 is where a new pilot can learn, 3 is where the best salvage is. */
+export type Danger = 1 | 2 | 3;
+
 /** A named region. Each point of the world belongs to the nearest region and takes its biome. */
 export interface RegionDef {
   id: string;
@@ -48,6 +51,8 @@ export interface RegionDef {
   z: number;
   /** Who holds the region's sites in a new game. */
   faction: WarFactionId;
+  /** How tough the pilots here are and how good their salvage is, whoever holds the region. */
+  danger: Danger;
 }
 
 /** Seeded placement of minor sites: `count` of them, on the given biomes, spaced apart. */
@@ -112,15 +117,15 @@ export const WORLD: WorldDef = {
   borderWarp: 330,
   siteSpacing: 650,
   regions: [
-    { id: "ashfall-basin", name: "Ashfall Basin", biome: "basin", x: 0, z: 0, faction: "combine" },
-    { id: "mirror-pan", name: "Mirror Pan", biome: "saltFlats", x: -2500, z: -2500, faction: "wardens" },
-    { id: "sunken-quarter", name: "Sunken Quarter", biome: "ruins", x: 100, z: -2700, faction: "syndicate" },
-    { id: "cinder-reach", name: "Cinder Reach", biome: "basin", x: 2600, z: -2400, faction: "syndicate" },
-    { id: "greywall", name: "Greywall Highlands", biome: "highlands", x: -2700, z: 100, faction: "wardens" },
-    { id: "old-meridian", name: "Old Meridian", biome: "ruins", x: 2700, z: 200, faction: "combine" },
-    { id: "tarn-heights", name: "Tarn Heights", biome: "highlands", x: -2400, z: 2600, faction: "drifters" },
-    { id: "white-reach", name: "White Reach", biome: "saltFlats", x: 200, z: 2700, faction: "drifters" },
-    { id: "kestrel-rise", name: "Kestrel Rise", biome: "highlands", x: 2600, z: 2600, faction: "combine" },
+    { id: "ashfall-basin", name: "Ashfall Basin", biome: "basin", x: 0, z: 0, faction: "combine", danger: 1 },
+    { id: "mirror-pan", name: "Mirror Pan", biome: "saltFlats", x: -2500, z: -2500, faction: "wardens", danger: 3 },
+    { id: "sunken-quarter", name: "Sunken Quarter", biome: "ruins", x: 100, z: -2700, faction: "syndicate", danger: 2 },
+    { id: "cinder-reach", name: "Cinder Reach", biome: "basin", x: 2600, z: -2400, faction: "syndicate", danger: 3 },
+    { id: "greywall", name: "Greywall Highlands", biome: "highlands", x: -2700, z: 100, faction: "wardens", danger: 2 },
+    { id: "old-meridian", name: "Old Meridian", biome: "ruins", x: 2700, z: 200, faction: "combine", danger: 2 },
+    { id: "tarn-heights", name: "Tarn Heights", biome: "highlands", x: -2400, z: 2600, faction: "drifters", danger: 2 },
+    { id: "white-reach", name: "White Reach", biome: "saltFlats", x: 200, z: 2700, faction: "drifters", danger: 1 },
+    { id: "kestrel-rise", name: "Kestrel Rise", biome: "highlands", x: 2600, z: 2600, faction: "combine", danger: 3 },
   ],
   sites: [
     // Ashfall Basin: where the game starts.

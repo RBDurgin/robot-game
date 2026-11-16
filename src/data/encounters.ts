@@ -1,4 +1,5 @@
 import type { RosterSlot } from "./factions";
+import type { Danger } from "./world";
 
 /**
  * A squad written as jobs rather than pilots: whichever faction holds the site fills each job
@@ -25,6 +26,16 @@ export const ENEMY_TUNING = {
    * and circles at long range until a slot opens. This is the main difficulty lever.
    */
   maxAttackers: 2,
+};
+
+/**
+ * How much tougher pilots are in more dangerous regions, on top of `ENEMY_TUNING`. Strength
+ * follows the place, not the player: the basin stays gentle and the far corners stay hard.
+ */
+export const DANGER: Record<Danger, { name: string; armorScale: number; damageScale: number }> = {
+  1: { name: "low threat", armorScale: 1, damageScale: 1 },
+  2: { name: "medium threat", armorScale: 1.2, damageScale: 1.25 },
+  3: { name: "high threat", armorScale: 1.45, damageScale: 1.5 },
 };
 
 /** Loop a little way outside a site's walls. */

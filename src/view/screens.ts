@@ -8,6 +8,8 @@ import { buyItem, buyPrice, isSpare, repairBill, sellItem, sellPrice, type Walle
 import { findItem, fitKit, fitProblems, fitToFrame, isPlatingItem, isWeaponItem, plainSpec, specKey, specName, tunedPlating, tunedWeapon, type Fit, type Item, type ItemSpec } from "../sim/items";
 import { fitsMount, itemName, kitStats, type ItemId } from "../sim/loadout";
 import { PRICES } from "../data/economy";
+import { UNLOCK_IDS, UNLOCKS } from "../data/unlocks";
+import { buyUnlock, canUnlock, frameUnlocked, lockProblems, mountUnlocked, unlockNeeds, type Progress } from "../sim/unlocks";
 
 type Child = Node | string;
 
@@ -55,8 +57,8 @@ export interface HangarOptions {
   frame: FrameId;
   /** The build last deployed. Its parts cannot be sold, whatever is on the bench. */
   fit: Fit;
-  /** The player's scrap and parts. The shop changes both in place. */
-  wallet: Wallet;
+  /** The player's scrap, parts and unlocks. The shop changes all three in place. */
+  wallet: Wallet & Progress;
   /** What a full repair of the suit costs, before the cap and what the player can pay. */
   repairCost: number;
   /** Called after each purchase or sale, to save it. */
@@ -211,9 +213,15 @@ export class Screens {
     let frameId = opts.frame;
     // The bench build: what is being put together, saved only on deploy.
     let fit: Fit = fitToFrame(FRAMES[frameId], opts.fit, inventory);
+    const unlocks = opts.wallet.unlocks;
 
-    const select = (label: string, options: Item[], current: number | undefined, allowEmpty: boolean, set: (uid: number | undefined) => void): HTMLElement => {
+    const select = (label: string, options: Item[], current: number | undefined, allowEmpty: boolean, set: (uid: number | undefined) => void, locked = false): HTMLElement => {
       const input = el("select");
+      if (locked) {
+        input.disabled = true;
+        input.append(el("option", "", ["Locked: see upgrades below"]));
+        return el("label", "row", [el("span", "", [label]), input]);
+      }
       if (allowEmpty) {
         const o = el("option", "", ["Empty"]);
         o.value = "";
@@ -261,7 +269,7 @@ export class Screens {
           ...frame.hardpoints.map((h) => el("div", "dim", [`${h.name}: ${fitted(fit.weapons[h.id])}`])),
           el("div", "dim", [`Plating: ${kit.plating.description}`]),
         );
-        const issues = fitProblems(frame, fit, inventory);
+        const issues = [...lockProblems(frame, fit.weapons, unlocks), ...fitProblems(frame, fit, inventory)];
         problems.replaceChildren(...issues.map((p) => el("li", "", [p])));
         deploy.disabled = issues.length > 0;
         // A part fitted on the bench stops being spare.
@@ -271,8 +279,10 @@ export class Screens {
       const frameSelect = el("label", "row", [el("span", "", ["Frame"])]);
       const frameInput = el("select");
       for (const id of FRAME_IDS) {
-        const o = el("option", "", [`${FRAMES[id].name} (${FRAMES[id].weightClass})`]);
+        const open = frameUnlocked(unlocks, id);
+        const o = el("option", "", [`${FRAMES[id].name} (${FRAMES[id].weightClass})${open ? "" : " · locked"}`]);
         o.value = id;
+        o.disabled = !open;
         o.selected = id === frameId;
         frameInput.append(o);
       }
@@ -298,6 +308,7 @@ export class Screens {
             if (other) render(false, true);
             else refresh();
           },
+          !mountUnlocked(unlocks, h.mount),
         ),
       );
 
@@ -314,6 +325,15 @@ export class Screens {
           return el("tr", "", [el("th", "", [itemName(id)]), el("td", "about", [partNumbers(plainSpec(id))]), el("td", "", [buy])]);
         })),
       ]);
+      // Frames and mounts still to be earned.
+      const upgrades = UNLOCK_IDS.filter((id) => !unlocks.includes(id)).map((id) => {
+        const u = UNLOCKS[id];
+        const needs = unlockNeeds(id, opts.wallet);
+        const buy = button(`Unlock · ${u.cost}`, () => trade(buyUnlock(opts.wallet, id)), "secondary");
+        buy.disabled = !canUnlock(id, opts.wallet);
+        buy.setAttribute("aria-label", `Unlock ${u.name} for ${u.cost} scrap`);
+        return el("tr", "", [el("th", "", [u.name]), el("td", "about", [u.description, ...(needs.length > 0 ? [el("div", "needs", [needs.join(". ") + "."])] : [])]), el("td", "", [buy])]);
+      });
       // Interchangeable parts share a row.
       const groups = new Map<string, Item[]>();
       for (const item of [...weaponsOwned, ...platingOwned]) groups.set(specKey(item), [...(groups.get(specKey(item)) ?? []), item]);
@@ -346,6 +366,7 @@ export class Screens {
         problems,
         el("h2", "", [`Your parts · ${opts.wallet.scrap} scrap`]),
         owned,
+        ...(upgrades.length > 0 ? [el("h2", "", ["Upgrades"]), el("table", "shop", [el("tbody", "", upgrades)])] : []),
         el("h2", "", ["Parts store"]),
         el("p", "dim", ["Bases sell plain parts. Better marks and modified parts only come from salvage."]),
         forSale,

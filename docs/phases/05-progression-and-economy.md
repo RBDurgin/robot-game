@@ -47,11 +47,25 @@ Scrap is collected in the slice but buys nothing. Once there are several frames 
   bases sell only plain parts. Rules are in `src/sim/items.ts`.
 - Step 5, first half. Saves carry a `version`; `MIGRATIONS` in `src/game/save.ts` brings old ones
   forward a version at a time. Every save from before this counts as version 1.
+- Step 3. Each faction's wrecks give up different things (`FACTION_LOOT`: plating, favoured
+  modifiers, how many weapons survive, scrap), and both wrecks and crates get better tiers and
+  more scrap in more dangerous regions (`DANGER_LOOT`). `lootTableFor` and `cacheTableFor` in
+  `src/sim/loot.ts` build the table for a kill or a crate.
+- Step 4. A new pilot has the Warden frame. The Kite costs 300 scrap; the Bastion 600 and three
+  sites cleared; its shoulder mounts 350 and +70 standing with any faction (`src/data/unlocks.ts`,
+  rules in `src/sim/unlocks.ts`). Bought in the hangar under Upgrades. Saves from before the
+  locks keep the frame and mounts they were using. `?arsenal` unlocks everything.
+- Step 6. Every region has a `danger` of 1 to 3 (`src/data/world.ts`). Pilots take their strength
+  from the region their site is in (`DANGER` in `src/data/encounters.ts`: up to +45% armor and
+  +50% damage), not from the player. The HUD and map name the threat on entering a region.
 
 ## For the playtest
 
 - Whether a lost suit (74 scrap on the medium frame, about three kills) stings the right amount.
 - Whether a Mk II or a modified part is noticeable in a fight, and worth swapping for.
+- Whether the high-threat corners are a real step up, and whether their salvage is worth the trip.
+- Whether the unlock prices and conditions come at the right time: the Kite early, the Bastion
+  after a few sites, shoulder mounts as a late goal.
 - Whether prices (120 to 300 for a weapon) make a purchase feel earned over the first hour.
 
 ## Out of scope
@@ -83,9 +97,9 @@ Story rewards (phase 6). Balance for a full-length game; aim for a curve that ho
 - [x] Progression shape and death cost agreed
 - [x] Repair costs and shop
 - [x] Item instances with tiers and modifiers
-- [ ] Loot tables by faction and region
-- [ ] Frame and hardpoint unlocks
+- [x] Loot tables by faction and region
+- [x] Frame and hardpoint unlocks
 - [x] Versioned saves with migrations
 - [ ] Save slots, IndexedDB, export and import
-- [ ] Difficulty by region
+- [x] Difficulty by region
 - [ ] User playtest and sign-off

@@ -1,11 +1,13 @@
 import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { BIOMES, BIOME_IDS } from "../data/biomes";
-import { ENEMY_TUNING } from "../data/encounters";
+import { DANGER, ENEMY_TUNING } from "../data/encounters";
 import { cssColor, FACTIONS, isWarFactionId, PLAYER_FACTION, WAR_FACTION_IDS, type WarFactionId } from "../data/factions";
 import { FEEL } from "../data/feel";
 import { FRAMES, SECTION_IDS, type FrameId, type SectionId } from "../data/frames";
 import { ENEMY_LOADOUTS } from "../data/loadouts";
 import { PLATING } from "../data/parts";
+import { UNLOCK_IDS } from "../data/unlocks";
+import type { Danger, RegionDef } from "../data/world";
 import { cacheSpots } from "../data/siteLayouts";
 import { STREAM } from "../data/streaming";
 import { REPUTATION, WAR } from "../data/war";
@@ -19,7 +21,7 @@ import { addItem, fitKit, fitLoadout, plainSpec, specName, type Fit } from "../s
 import type { ItemId } from "../sim/loadout";
 import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
-import { rollCache, rollLoot } from "../sim/loot";
+import { cacheTableFor, lootTableFor, rollCache, rollLoot } from "../sim/loot";
 import { lerp, makeRng, type Vec3 } from "../sim/math";
 import { buildPopulation, garrisonLeft, populationChanges, raidersLeft, raidRecords, syncGarrison, type IdSource, type MechRecord } from "../sim/population";
 import { attitudeOf, hostileFactions, recordCapture, recordFriendlyFire, recordKill, type Attitude } from "../sim/reputation";
@@ -85,7 +87,7 @@ export class World {
   /** Allied pilots following the player. */
   readonly wingmen = new Set<MechEntity>();
   /** The named region the player is in. */
-  region: { id: string; name: string };
+  region: RegionDef;
   readonly effects: Effects;
   readonly combat: Combat;
   readonly salvage: SalvageField;
@@ -253,6 +255,7 @@ export class World {
     const save = loadSave();
     // `?arsenal` in the URL stocks the hangar with two of every weapon and plating, for playtests.
     if (new URLSearchParams(location.search).has("arsenal")) {
+      save.unlocks = [...UNLOCK_IDS];
       for (const id of [...Object.keys(WEAPONS), ...Object.keys(PLATING)] as ItemId[]) {
         for (let have = save.inventory.filter((item) => item.id === id).length; have < 2; have++) addItem(save.inventory, plainSpec(id));
       }
@@ -744,7 +747,7 @@ export class World {
     this.screens.showMap({
       model: this.model,
       player: { x: this.player.feet.x, z: this.player.feet.z, yaw: this.input.yaw },
-      region: this.region.name,
+      region: `${this.region.name} (${DANGER[this.region.danger].name})`,
       sites: this.model.sites
         .filter((s) => this.save.discovered.includes(s.id) || held.has(s.id))
         .map((s) => {
@@ -816,7 +819,7 @@ export class World {
     for (const [dx, dz] of cacheSpots(site)) {
       const x = site.x + dx;
       const z = site.z + dz;
-      this.salvage.spawn(new Vector3(x, this.heightAt(x, z) + 2.6, z), rollCache(rng), site.id);
+      this.salvage.spawn(new Vector3(x, this.heightAt(x, z) + 2.6, z), rollCache(rng, cacheTableFor(regionAt(this.model.def, site.x, site.z).danger)), site.id);
     }
   }
 
@@ -866,6 +869,8 @@ export class World {
       // Never before the ground under it has a collider.
       if (!this.terrain.hasGround(record.x, record.z)) continue;
       perfMark("wake");
+      // A pilot is as tough as the region its site is in, wherever it has wandered to.
+      const danger = DANGER[this.dangerOf(record)];
       const mech = new MechEntity(this.scene, {
         name: `${FACTIONS[record.faction].name} ${record.member.loadout}`,
         frame: FRAMES[record.member.frame],
@@ -873,8 +878,8 @@ export class World {
         position: World.groundPoint(this.model, record.x, record.z, 0.6),
         yaw: record.yaw,
         loadout: ENEMY_LOADOUTS[record.member.loadout],
-        armorScale: ENEMY_TUNING.armorScale,
-        damageScale: ENEMY_TUNING.damageScale,
+        armorScale: ENEMY_TUNING.armorScale * danger.armorScale,
+        damageScale: ENEMY_TUNING.damageScale * danger.damageScale,
       });
       if (record.health) mech.adoptHealth(record.health);
       mech.brain = new AiController(record.patrol, record.home, record.patrolIndex, record.squadId, AI_ROLES[record.member.role]);
@@ -972,7 +977,10 @@ export class World {
       this.kills++;
       // The crate floats just above the wreck. Only the player's kills leave one: the war's
       // own dead would otherwise litter every battlefield with free parts.
-      this.salvage.spawn(new Vector3(ground.x, ground.y + 2.6, ground.z), rollLoot(victim.loadout, this.rng));
+      const record = this.records.get(victim);
+      const danger = record ? this.dangerOf(record) : regionAt(this.model.def, ground.x, ground.z).danger;
+      const table = isWarFactionId(faction) ? lootTableFor(faction, danger) : undefined;
+      this.salvage.spawn(new Vector3(ground.x, ground.y + 2.6, ground.z), rollLoot(victim.loadout, this.rng, table));
       if (isWarFactionId(faction)) this.changeStanding(() => recordKill(this.save.standing, faction));
     }
     const record = this.records.get(victim);
@@ -1009,6 +1017,12 @@ export class World {
       this.notify(`${site.name} cleared. It stands empty for whoever comes next.`, 5);
     }
     writeSave(this.save);
+  }
+
+  /** The danger of the region a pilot's site is in. */
+  private dangerOf(record: MechRecord): Danger {
+    const site = this.model.siteById.get(record.siteId);
+    return regionAt(this.model.def, site?.x ?? record.x, site?.z ?? record.z).danger;
   }
 
   notify(text: string, seconds = 3): void {
@@ -1087,7 +1101,7 @@ export class World {
       const region = regionAt(this.model.def, this.player.feet.x, this.player.feet.z);
       if (region.id !== this.region.id) {
         this.region = region;
-        if (!this.message) this.notify(`Entering ${region.name}`, 4);
+        if (!this.message) this.notify(`Entering ${region.name}: ${DANGER[region.danger].name}`, 4);
       }
     }
     if (this.tick % POSITION_SAVE_TICKS === 0 && this.player.state.grounded) this.savePosition();
