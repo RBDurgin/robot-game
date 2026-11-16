@@ -1,12 +1,13 @@
 import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { BIOMES, BIOME_IDS } from "../data/biomes";
 import { ENEMY_TUNING } from "../data/encounters";
-import { FACTIONS } from "../data/factions";
+import { cssColor, FACTIONS, isWarFactionId, PLAYER_FACTION, WAR_FACTION_IDS, type WarFactionId } from "../data/factions";
 import { FEEL } from "../data/feel";
 import { FRAMES, SECTION_IDS, type FrameId, type SectionId } from "../data/frames";
 import { ENEMY_LOADOUTS, type Loadout } from "../data/loadouts";
 import { cacheSpots } from "../data/siteLayouts";
 import { STREAM } from "../data/streaming";
+import { REPUTATION, WAR } from "../data/war";
 import { WEAPONS, type WeaponId } from "../data/weapons";
 import { WORLD } from "../data/world";
 import { AI_ROLES } from "../sim/ai/brain";
@@ -17,7 +18,9 @@ import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
 import { rollCache, rollLoot } from "../sim/loot";
 import { lerp, makeRng, type Vec3 } from "../sim/math";
-import { buildPopulation, garrisonLeft, populationChanges, type MechRecord } from "../sim/population";
+import { buildPopulation, garrisonLeft, populationChanges, raidersLeft, raidRecords, syncGarrison, type IdSource, type MechRecord } from "../sim/population";
+import { attitudeOf, hostileFactions, recordCapture, recordFriendlyFire, recordKill, type Attitude } from "../sim/reputation";
+import { buildWarMap, captureByRaid, clearSite, endRaid, parseWar, regionControl, setTroops, settleRaid, siteCounts, stepWar, type Holder, type WarContext, type WarEvent, type WarMap, type WarState } from "../sim/war";
 import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "../sim/terrain";
 import { buildWorldModel } from "../sim/worldgen";
 import { Sfx } from "../view/audio";
@@ -43,6 +46,16 @@ const POSITION_SAVE_TICKS = 300;
 const FOG_RATE = 0.6;
 /** Damage in one hit that counts as a heavy blow for feedback (sound, shake). */
 const HEAVY_HIT = 45;
+/** Colour of the marker over a mech and of its radar blip, by how it regards the player. */
+const ATTITUDE_COLORS: Record<Attitude, string> = { hostile: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff" };
+/** Allies this close to the player come to help when a fight starts, metres. */
+const RALLY_RANGE = 320;
+/** Wingmen are picked from allied pilots within this many metres. */
+const WINGMAN_RANGE = 160;
+const MAX_WINGMEN = 2;
+/** Raiders nobody can see close on their target at this speed (m/s), and stop this far from its middle (m). */
+const RAID_MARCH = 6;
+const RAID_ARRIVED = 30;
 const SECTION_NAMES: Record<SectionId, string> = { torso: "torso", armL: "left arm", armR: "right arm", legs: "legs" };
 
 /** paused: menu open. hangar: refitting at base. map: world map open. complete: mission summary showing. */
@@ -54,10 +67,20 @@ export type MissionPhase = "assault" | "return" | "done";
 export class World {
   /** The mechs in the scene: the player and the enemies near enough to be awake. */
   readonly mechs: MechEntity[] = [];
-  /** Every enemy pilot in the world, awake or asleep. */
+  /** Every AI pilot in the world, awake or asleep. Changes as the war moves garrisons about. */
   readonly population: MechRecord[];
-  /** The record behind each awake enemy. */
+  /** The record behind each awake AI mech. */
   private readonly records = new Map<MechEntity, MechRecord>();
+  private readonly recordIds: IdSource = { next: 0 };
+  /** The sites the war is fought over. */
+  readonly warMap: WarMap;
+  /** Who holds what. Lives in the save. */
+  readonly war: WarState;
+  private readonly warContext: WarContext;
+  /** Damage the player has done to squads that were not hostile, by squad id. */
+  private readonly grievance = new Map<string, number>();
+  /** Allied pilots following the player. */
+  readonly wingmen = new Set<MechEntity>();
   /** The named region the player is in. */
   region: { id: string; name: string };
   readonly effects: Effects;
@@ -74,6 +97,8 @@ export class World {
   mode: GameMode = "paused";
   phase: MissionPhase = "assault";
   tick = 0;
+  /** Test hook: stops the war's clock, so tests can rely on who holds what. */
+  warPaused = false;
   /** Test hook: fields set here replace the player's real input. */
   intentOverride: Partial<Intent> | null = null;
   /** Hostile mech currently under the crosshair. */
@@ -87,7 +112,7 @@ export class World {
   private hitFlash = 0;
   private damageFlash = 0;
   private killFlash = 0;
-  /** Enemy pilots currently allowed to fire. */
+  /** Pilots currently allowed to fire on the player. */
   private attackers = new Set<MechEntity>();
   /** Player heat state last step, to spot the moment a warning should sound. */
   private wasHot = false;
@@ -114,11 +139,32 @@ export class World {
     this.salvage = new SalvageField(scene);
     this.wrecks = new WreckField(scene, FEEL.maxWrecks);
     this.mechs.push(player);
-    this.population = buildPopulation(model, new Set(save.cleared));
+    this.warMap = buildWarMap(model);
+    const fresh = save.war === null;
+    this.war = parseWar(save.war, this.warMap);
+    if (fresh) {
+      // A new game, or a save from before the war: start it around what the player had done.
+      for (const id of save.held) if (this.warMap.byId.has(id)) clearSite(this.war, this.warMap, id, true);
+      for (const id of save.cleared) if (this.warMap.byId.has(id) && !save.held.includes(id)) clearSite(this.war, this.warMap, id, false);
+    }
+    save.war = this.war;
+    save.held = this.heldBases.filter((b) => !b.held).map((b) => b.id);
+    this.warContext = {
+      observed: (id) => this.observed(id),
+      frozen: (id) => id === model.def.missionOutpost && this.phase === "assault",
+      hostileToPlayer: (faction) => attitudeOf(this.save.standing, faction) === "hostile",
+    };
+    this.population = buildPopulation(model, this.war, this.recordIds);
     this.region = regionAt(model.def, player.feet.x, player.feet.z);
     if (save.cleared.includes(model.def.missionOutpost)) this.phase = "done";
     terrain.onSite = (site, loaded) => this.onSiteStreamed(site, loaded);
 
+    const rules = {
+      hostile: (a: MechEntity, b: MechEntity) => this.hostile(a, b),
+      // The player's shots hit whoever they are pointed at; shooting friends has consequences.
+      canHit: (shooter: MechEntity, target: MechEntity) => shooter === this.player || this.hostile(shooter, target),
+      damageScale: (attacker: MechEntity, victim: MechEntity) => (attacker.brain && victim.brain ? ENEMY_TUNING.aiDamageScale : attacker.damageScale),
+    };
     this.combat = new Combat(scene, this.effects, () => this.mechs, this.rng, {
       onDamage: (victim, attacker, amount, result) => {
         const strength = Math.min(1, amount / HEAVY_HIT);
@@ -135,8 +181,10 @@ export class World {
           this.hitFlash = 1;
           this.sfx.hitLanded(strength);
           for (const id of lost) this.notify(`${victim.name}: ${SECTION_NAMES[id]} destroyed.`, 3);
+          this.onPlayerHit(victim, amount);
         }
         this.raiseAlarm(victim);
+        if (victim === this.player || attacker === this.player) this.rallyAllies();
       },
       onKill: (victim, attacker) => this.onKill(victim, attacker),
       onFire: (shooter, weapon, at) => {
@@ -149,7 +197,7 @@ export class World {
         this.sfx.explosion(d, radius);
         this.cameraRig.shake(Math.max(0, 1 - d / 60) * 0.8);
       },
-    });
+    }, rules);
 
     this.applySettings(save.settings);
     this.cameraRig.mode = save.settings.defaultView;
@@ -159,6 +207,9 @@ export class World {
     });
     input.onPress("KeyH", () => {
       if (this.mode === "playing" && this.atBase && this.player.alive) this.openHangar();
+    });
+    input.onPress("KeyG", () => {
+      if (this.mode === "playing" && this.player.alive) this.toggleWingmen();
     });
     input.onPress("KeyP", () => {
       if (this.mode === "playing") this.pause();
@@ -212,7 +263,7 @@ export class World {
     const player = new MechEntity(scene, {
       name: "player",
       frame: FRAMES[save.frame],
-      faction: "drifters",
+      faction: PLAYER_FACTION,
       position: World.groundPoint(model, start.x, start.z, 0.6),
       yaw: spawnYaw,
       loadout: save.loadout,
@@ -255,32 +306,283 @@ export class World {
     return this.model.siteById.get(this.model.def.missionOutpost)!;
   }
 
-  /** Bases the player holds: those held from the start and those taken since. */
-  get heldBases(): Site[] {
-    return this.model.sites.filter((s) => s.kind === "base" && (s.held || this.save.held.includes(s.id)));
+  /** Who holds a site: a faction, the player, or nobody. Null too for places nobody fights over. */
+  ownerOf(siteId: string): Holder {
+    return this.war.sites[siteId]?.owner ?? null;
   }
 
-  /** The held base the player is standing in, if any. */
+  /** Bases the player holds: their home and those taken since. */
+  get heldBases(): Site[] {
+    return this.model.sites.filter((s) => s.kind === "base" && this.ownerOf(s.id) === "player");
+  }
+
+  /** Bases the player can use (hangar, fast travel): their own and those of factions allied to them. */
+  get openBases(): Site[] {
+    return this.model.sites.filter((s) => {
+      if (s.kind !== "base") return false;
+      const owner = this.ownerOf(s.id);
+      return owner === "player" || (isWarFactionId(owner) && this.attitude(owner) === "allied");
+    });
+  }
+
+  /** The usable base the player is standing in, if any. */
   get currentBase(): Site | null {
     const p = this.player.feet;
-    return this.heldBases.find((b) => Math.hypot(p.x - b.x, p.z - b.z) < b.radius) ?? null;
+    return this.openBases.find((b) => Math.hypot(p.x - b.x, p.z - b.z) < b.radius) ?? null;
   }
 
-  private nearestHeldBase(x: number, z: number): Site {
+  private nearestOf(bases: Site[], x: number, z: number): Site {
     let best = this.homeBase;
-    for (const b of this.heldBases) {
+    for (const b of bases) {
       if (Math.hypot(b.x - x, b.z - z) < Math.hypot(best.x - x, best.z - z)) best = b;
     }
     return best;
   }
 
-  /** True while any awake enemy is hunting rather than patrolling. */
-  get inCombat(): boolean {
-    return this.mechs.some((m) => m.brain && m.alive && m.brain.state.mode !== "patrol");
+  /** The player's nearest base that is not under attack: where a lost suit is recovered to. */
+  private nearestHeldBase(x: number, z: number): Site {
+    return this.nearestOf(this.heldBases.filter((b) => !this.war.raids.some((r) => r.to === b.id)), x, z);
   }
 
-  get enemies(): MechEntity[] {
+  /** True while any awake pilot is hunting the player. */
+  get inCombat(): boolean {
+    return this.mechs.some((m) => m.brain && m.alive && m.brain.state.mode !== "patrol" && m.brain.target === this.player);
+  }
+
+  /** Every other living mech in the scene, friend or foe. */
+  get others(): MechEntity[] {
     return this.mechs.filter((m) => m !== this.player && m.alive);
+  }
+
+  /** The living mechs in the scene that are hostile to the player. */
+  get enemies(): MechEntity[] {
+    return this.mechs.filter((m) => m !== this.player && m.alive && this.hostile(this.player, m));
+  }
+
+  // --- Factions and standing ---
+
+  /** How a faction regards the player. */
+  attitude(faction: WarFactionId): Attitude {
+    return attitudeOf(this.save.standing, faction);
+  }
+
+  /** How one mech regards the player: its faction's attitude, unless the player has provoked its squad. */
+  attitudeOfMech(mech: MechEntity): Attitude {
+    if (!isWarFactionId(mech.faction)) return "allied";
+    if (mech.brain && (this.grievance.get(mech.brain.squadId) ?? 0) >= REPUTATION.provokeDamage) return "hostile";
+    return this.attitude(mech.faction);
+  }
+
+  /** Whether two mechs attack each other on sight. */
+  hostile(a: MechEntity, b: MechEntity): boolean {
+    if (a === b) return false;
+    if (a === this.player) return this.attitudeOfMech(b) === "hostile";
+    if (b === this.player) return this.attitudeOfMech(a) === "hostile";
+    return hostileFactions(a.faction, b.faction, this.save.standing);
+  }
+
+  /** Change the player's standing through `change`, and say so when a faction's attitude shifts. */
+  private changeStanding(change: () => void): void {
+    const before = WAR_FACTION_IDS.map((f) => this.attitude(f));
+    change();
+    let shifted = false;
+    WAR_FACTION_IDS.forEach((f, i) => {
+      const now = this.attitude(f);
+      if (now === before[i]) return;
+      shifted = true;
+      const name = FACTIONS[f].name;
+      this.notify(now === "hostile" ? `The ${name} now attacks you on sight.` : now === "allied" ? `The ${name} counts you an ally: its bases are open to you.` : before[i] === "hostile" ? `The ${name} no longer attacks you on sight.` : `The ${name} no longer counts you an ally.`, 6);
+    });
+    if (shifted) this.refreshMarkers();
+  }
+
+  /** The player has hit a mech: shooting those who were not hostile costs standing and patience. */
+  private onPlayerHit(victim: MechEntity, amount: number): void {
+    if (!victim.brain || !isWarFactionId(victim.faction) || this.hostile(this.player, victim)) return;
+    const faction = victim.faction;
+    const squad = victim.brain.squadId;
+    const total = (this.grievance.get(squad) ?? 0) + amount;
+    this.grievance.set(squad, total);
+    this.changeStanding(() => recordFriendlyFire(this.save.standing, faction, amount));
+    if (total >= REPUTATION.provokeDamage && this.attitude(faction) !== "hostile") {
+      this.notify(`You have provoked the ${FACTIONS[faction].short}: this squad will fight you.`, 5);
+      for (const mech of this.mechs) if (mech.brain?.squadId === squad) this.wingmen.delete(mech), (mech.brain.follow = null);
+      this.refreshMarkers();
+    } else if (!this.message) {
+      this.notify(`Check fire: that is a ${FACTIONS[faction].short} suit.`, 2);
+    }
+  }
+
+  /** Allies near the player join a fight the player is in. */
+  private rallyAllies(): void {
+    const p = this.player.feet;
+    for (const mech of this.mechs) {
+      if (mech.brain && mech.alive && this.attitudeOfMech(mech) === "allied" && Vector3.Distance(mech.feet, p) < RALLY_RANGE) mech.brain.alert();
+    }
+  }
+
+  /** Call the nearest allied pilots to follow the player, or send them home if some already do. */
+  toggleWingmen(): void {
+    if (this.wingmen.size > 0) {
+      this.releaseWingmen();
+      this.notify("Wingmen released.");
+      return;
+    }
+    const p = this.player.feet;
+    const near = this.mechs
+      .filter((m) => m.brain && m.alive && this.attitudeOfMech(m) === "allied" && Vector3.Distance(m.feet, p) < WINGMAN_RANGE)
+      .sort((a, b) => Vector3.DistanceSquared(a.feet, p) - Vector3.DistanceSquared(b.feet, p))
+      .slice(0, MAX_WINGMEN);
+    if (near.length === 0) {
+      this.notify("No allied pilots near enough to call.");
+      return;
+    }
+    for (const mech of near) {
+      mech.brain!.follow = this.player;
+      this.wingmen.add(mech);
+    }
+    this.notify(`${near.length} ${FACTIONS[near[0]!.faction].short} ${near.length === 1 ? "pilot" : "pilots"} on your wing. G: release.`, 4);
+  }
+
+  private releaseWingmen(): void {
+    for (const mech of this.wingmen) if (mech.brain) mech.brain.follow = null;
+    this.wingmen.clear();
+  }
+
+  private refreshMarkers(): void {
+    for (const mech of this.mechs) if (mech !== this.player) this.hud.setMarkerColor(mech.visual.markerNode, ATTITUDE_COLORS[this.attitudeOfMech(mech)]);
+  }
+
+  // --- The war ---
+
+  /** True if the player is near enough to a site that what happens there must be played out for real. */
+  private observed(siteId: string): boolean {
+    const site = this.model.siteById.get(siteId);
+    const p = this.player.feet;
+    return site !== undefined && Math.hypot(site.x - p.x, site.z - p.z) < WAR.observeRange;
+  }
+
+  /** Living defenders of a site: pilots of whoever holds it. */
+  private defendersLeft(siteId: string): number {
+    const owner = this.ownerOf(siteId);
+    return isWarFactionId(owner) ? garrisonLeft(this.population, siteId, owner) : 0;
+  }
+
+  /** One tick of the war, and whatever it changes around the player. */
+  private warTick(): void {
+    const events = stepWar(this.war, this.warMap, this.warContext);
+    for (const event of events) this.onWarEvent(event);
+    this.watchRaids();
+    if (events.length > 0) writeSave(this.save);
+  }
+
+  /** Rebuild a site's sleeping garrison from the war, unless the player is there to see it. */
+  private syncSite(siteId: string, evenIfObserved = false): void {
+    const site = this.model.siteById.get(siteId);
+    if (site && (evenIfObserved || !this.observed(siteId))) syncGarrison(this.population, this.model, site, this.war, this.recordIds);
+  }
+
+  private onWarEvent(event: WarEvent): void {
+    if (event.type === "reinforced" || event.type === "joined") {
+      this.syncSite(event.site);
+    } else if (event.type === "launched") {
+      this.syncSite(event.raid.from);
+      const target = this.model.siteById.get(event.raid.to)!;
+      if (this.ownerOf(target.id) === "player") {
+        const minutes = Math.max(1, Math.round((event.raid.eta * WAR.tickSeconds) / 60));
+        this.notify(`${FACTIONS[event.raid.faction].name} raid heading for ${target.name}: about ${minutes} min. Defend it or lose it.`, 8);
+      }
+    } else if (event.type === "staged") {
+      const target = this.model.siteById.get(event.raid.to)!;
+      const from = this.model.siteById.get(event.raid.from)!;
+      this.population.push(...raidRecords(this.model, event.raid, target, from, WAR.raidSpawnDistance, this.recordIds));
+      this.notify(`${FACTIONS[event.raid.faction].name} raid closing on ${target.name}.`, 5);
+    } else {
+      this.syncSite(event.site);
+      this.reportBattle(event);
+    }
+  }
+
+  /** Tell the player how a raid ended, if it concerns them or a place they know. */
+  private reportBattle(event: Extract<WarEvent, { type: "captured" | "repelled" }>): void {
+    const site = this.model.siteById.get(event.site)!;
+    const by = FACTIONS[event.by];
+    if (event.type === "captured" && event.from === "player") {
+      this.save.held = this.save.held.filter((id) => id !== site.id);
+      this.notify(`${site.name} has fallen to the ${by.name}.`, 8);
+    } else if (this.save.discovered.includes(site.id) && (!this.message || this.message.time < 1)) {
+      const from = event.type === "captured" && isWarFactionId(event.from) ? ` from the ${FACTIONS[event.from].short}` : "";
+      this.notify(event.type === "captured" ? `War report: the ${by.short} took ${site.name}${from}.` : `War report: a ${by.short} raid on ${site.name} was beaten off.`, 5);
+    }
+  }
+
+  /** Follow the raids being played out with real mechs, and report each one's end to the war. */
+  private watchRaids(): void {
+    const p = this.player.feet;
+    for (const raid of [...this.war.raids]) {
+      if (!raid.staged) continue;
+      const site = this.model.siteById.get(raid.to)!;
+      const attackers = raidersLeft(this.population, raid.id);
+      const defenders = this.defendersLeft(site.id);
+      let result: WarEvent | null = null;
+      // Raiders too far from the player to be awake march in unseen.
+      let arrivedAll = true;
+      let awake = false;
+      for (const r of this.population) {
+        if (!r.alive || (r.raidId !== raid.id && (r.siteId !== site.id || r.raidId !== undefined))) continue;
+        awake ||= r.active;
+        if (r.raidId !== raid.id) continue;
+        const d = Math.hypot(site.x - r.x, site.z - r.z);
+        if (d > RAID_ARRIVED && !r.active) {
+          const stride = Math.min(d - RAID_ARRIVED, RAID_MARCH * WAR.tickSeconds);
+          r.x += ((site.x - r.x) / d) * stride;
+          r.z += ((site.z - r.z) / d) * stride;
+        }
+        if (Math.hypot(site.x - r.x, site.z - r.z) > site.radius + 40) arrivedAll = false;
+      }
+      if (attackers === 0) {
+        result = endRaid(this.war, raid.id);
+      } else if (!this.observed(site.id) || (!awake && arrivedAll && this.ownerOf(site.id) !== "player")) {
+        // The player has left, or is too far off for anyone to be awake: finish it unseen with
+        // whoever is still standing.
+        result = settleRaid(this.war, this.warMap, raid.id, attackers, defenders);
+      } else if (defenders === 0) {
+        // The player holds their own base by standing in it.
+        const contested = this.ownerOf(site.id) === "player" && this.player.alive && Math.hypot(p.x - site.x, p.z - site.z) < WAR.contestRange;
+        const arrived = this.population.some((r) => r.raidId === raid.id && r.alive && Math.hypot(r.x - site.x, r.z - site.z) < site.radius + 40);
+        if (contested || !arrived) continue;
+        result = captureByRaid(this.war, this.warMap, raid.id, attackers);
+        if (result) {
+          // The survivors are the new garrison, where they stand.
+          for (const r of this.population) {
+            if (r.raidId !== raid.id) continue;
+            delete r.raidId;
+            r.squadId = `${site.id}:raid${raid.id}`;
+          }
+          for (const [mech, r] of this.records) if (r.squadId === `${site.id}:raid${raid.id}` && mech.brain) mech.brain.squadId = r.squadId;
+        }
+      }
+      if (!result) continue;
+      this.removeRaidRecords(raid.id);
+      if (result.type === "captured" || result.type === "repelled") {
+        // Awake pilots are kept as they are; anyone asleep is rebuilt to match the result.
+        this.syncSite(result.site, true);
+        this.reportBattle(result);
+      }
+      writeSave(this.save);
+    }
+  }
+
+  /** Take what is left of a finished raid out of the world. */
+  private removeRaidRecords(raidId: number): void {
+    for (let i = this.population.length - 1; i >= 0; i--) {
+      const r = this.population[i]!;
+      if (r.raidId !== raidId) continue;
+      const mech = [...this.records].find(([, rec]) => rec === r)?.[0];
+      // Survivors still in view walk on as stragglers; they are forgotten when they next sleep.
+      if (mech && mech.alive) continue;
+      this.population.splice(i, 1);
+    }
   }
 
   /** True when the player is close enough to the base to use the hangar. */
@@ -374,7 +676,7 @@ export class World {
     this.player = new MechEntity(this.scene, {
       name: "player",
       frame: FRAMES[frame],
-      faction: "drifters",
+      faction: PLAYER_FACTION,
       position: at,
       yaw,
       loadout: this.save.loadout,
@@ -395,7 +697,10 @@ export class World {
       { seconds: this.tick / 60, kills: this.kills, deaths: this.deaths, scrap: this.save.scrap, items: this.itemsSalvaged },
       () => {
         // Play the opening mission again: its garrison returns and the player starts at home.
-        this.save.cleared = this.save.cleared.filter((id) => id !== this.model.def.missionOutpost);
+        const post = this.model.def.missionOutpost;
+        this.save.cleared = this.save.cleared.filter((id) => id !== post);
+        this.war.sites[post] = { owner: this.warMap.byId.get(post)!.startOwner, troops: this.warMap.byId.get(post)!.capacity };
+        this.war.raids = this.war.raids.filter((r) => r.to !== post && r.from !== post);
         this.save.position = null;
         writeSave(this.save);
         location.reload();
@@ -413,6 +718,10 @@ export class World {
     this.sfx.setThrust(0);
     this.sfx.ui();
     const held = new Set(this.heldBases.map((b) => b.id));
+    const open = new Set(this.openBases.map((b) => b.id));
+    const counts = siteCounts(this.war);
+    const tint = (holder: Holder): string | null => (holder === "player" ? cssColor(FACTIONS[PLAYER_FACTION].colors.primary) : holder ? cssColor(FACTIONS[holder].colors.primary) : null);
+    const control = regionControl(this.war, this.warMap);
     const blocked = !this.player.alive ? "Suit destroyed." : this.inCombat ? "Hostiles are engaged: break contact to travel." : null;
     this.screens.showMap({
       model: this.model,
@@ -420,7 +729,27 @@ export class World {
       region: this.region.name,
       sites: this.model.sites
         .filter((s) => this.save.discovered.includes(s.id) || held.has(s.id))
-        .map((s) => ({ site: s, held: held.has(s.id), hostile: garrisonLeft(this.population, s.id) > 0 })),
+        .map((s) => {
+          const owner = this.ownerOf(s.id);
+          return {
+            site: s,
+            held: held.has(s.id),
+            travel: open.has(s.id),
+            hostile: isWarFactionId(owner) && this.attitude(owner) === "hostile",
+            owner: isWarFactionId(owner) ? FACTIONS[owner].short : null,
+            color: tint(owner),
+            raided: this.war.raids.some((r) => r.to === s.id),
+          };
+        }),
+      territory: Object.entries(control).map(([regionId, c]) => ({ regionId, color: tint(c.owner), contested: c.contested })),
+      factions: WAR_FACTION_IDS.map((f) => ({
+        name: FACTIONS[f].name,
+        style: FACTIONS[f].style,
+        color: cssColor(FACTIONS[f].colors.primary),
+        standing: Math.round(this.save.standing[f]),
+        attitude: this.attitude(f),
+        sites: counts[f],
+      })),
       total: this.model.sites.length,
       travelBlocked: blocked,
       onTravel: (id) => this.travelTo(id),
@@ -430,8 +759,9 @@ export class World {
 
   /** Fast travel to a base the player holds. Returns false if that is not allowed right now. */
   travelTo(siteId: string): boolean {
-    const base = this.heldBases.find((b) => b.id === siteId);
+    const base = this.openBases.find((b) => b.id === siteId);
     if (!base || !this.player.alive || this.inCombat) return false;
+    this.releaseWingmen();
     this.movePlayer(base.x, base.z, base.id === this.model.def.homeBase ? World.homeYaw(this.model) : 0);
     this.savePosition();
     this.notify(`Arrived at ${base.name}.`, 4);
@@ -472,7 +802,7 @@ export class World {
     }
   }
 
-  /** Note any site the player has come upon, and take an unguarded base on arrival. */
+  /** Note any site the player has come upon, and take a base nobody holds on arrival. */
   private discoverSites(): void {
     const p = this.player.feet;
     for (const site of this.model.sites) {
@@ -483,11 +813,12 @@ export class World {
         perfMark("discover");
         if (site.id !== this.model.def.homeBase) this.notify(`Discovered: ${site.name}`, 4);
       }
-      if (site.kind === "base" && !site.garrison) this.holdBase(site);
+      if (site.kind === "base" && this.ownerOf(site.id) === null && this.war.sites[site.id]) this.holdBase(site);
     }
   }
 
   private holdBase(site: Site): void {
+    if (this.ownerOf(site.id) !== "player") clearSite(this.war, this.warMap, site.id, true);
     if (site.held || this.save.held.includes(site.id)) return;
     this.save.held.push(site.id);
     writeSave(this.save);
@@ -504,12 +835,14 @@ export class World {
     const { wake, sleep } = populationChanges(this.population, p.x, p.z, STREAM);
     for (const record of sleep) {
       const mech = this.mechs.find((m) => this.records.get(m) === record);
-      if (!mech) continue;
+      if (!mech || this.wingmen.has(mech)) continue;
       record.active = false;
       record.yaw = mech.state.legsYaw;
       record.health = mech.health;
       record.patrolIndex = mech.brain?.state.patrolIndex ?? record.patrolIndex;
       this.removeMech(mech);
+      // Stragglers of a raid that is over have nowhere to belong: they are gone once out of sight.
+      if (record.raidId !== undefined && !this.war.raids.some((r) => r.id === record.raidId)) this.population.splice(this.population.indexOf(record), 1);
     }
     for (const record of wake) {
       // Never before the ground under it has a collider.
@@ -530,7 +863,7 @@ export class World {
       record.active = true;
       this.records.set(mech, record);
       this.mechs.push(mech);
-      this.hud.addMarker(mech.visual.markerNode);
+      this.hud.addMarker(mech.visual.markerNode, ATTITUDE_COLORS[this.attitudeOfMech(mech)]);
     }
   }
 
@@ -539,6 +872,10 @@ export class World {
     this.hud.removeMarker(mech.visual.markerNode);
     this.records.delete(mech);
     this.attackers.delete(mech);
+    this.wingmen.delete(mech);
+    // A squad's grudge lasts while any of it is in sight.
+    const squad = mech.brain?.squadId;
+    if (squad && !this.mechs.some((m) => m !== mech && m.brain?.squadId === squad)) this.grievance.delete(squad);
     if (this.aimedMech === mech) this.aimedMech = null;
     for (const other of this.mechs) if (other.lock.target === mech) other.lock.target = null;
     mech.dispose();
@@ -611,29 +948,49 @@ export class World {
       this.notify("Suit destroyed. Recovering to base...", RESPAWN_DELAY);
       return;
     }
-    this.kills++;
-    // The crate floats just above the wreck.
-    this.salvage.spawn(new Vector3(ground.x, ground.y + 2.6, ground.z), rollLoot(victim.loadout, this.rng));
+    const byPlayer = attacker === this.player;
+    const faction = victim.faction;
+    if (byPlayer) {
+      this.kills++;
+      // The crate floats just above the wreck. Only the player's kills leave one: the war's
+      // own dead would otherwise litter every battlefield with free parts.
+      this.salvage.spawn(new Vector3(ground.x, ground.y + 2.6, ground.z), rollLoot(victim.loadout, this.rng));
+      if (isWarFactionId(faction)) this.changeStanding(() => recordKill(this.save.standing, faction));
+    }
     const record = this.records.get(victim);
     if (!record) return;
     record.alive = false;
     record.active = false;
+    // Raiders belong to no garrison; `watchRaids` notices when the last of them is gone.
+    if (record.raidId !== undefined) return;
     const site = this.model.siteById.get(record.siteId)!;
-    const left = garrisonLeft(this.population, site.id);
+    const owner = this.ownerOf(site.id);
+    // A stray whose site has changed hands since it left: nothing more to settle.
+    if (owner !== faction || !isWarFactionId(owner)) return;
+    const left = this.defendersLeft(site.id);
+    setTroops(this.war, site.id, left);
     if (left > 0) {
-      this.notify(`Hostile destroyed. ${left} remaining at ${site.name}.`, 4);
+      if (byPlayer) this.notify(`${FACTIONS[owner].short} suit destroyed. ${left} remaining at ${site.name}.`, 4);
       return;
     }
+    const now = clearSite(this.war, this.warMap, site.id, byPlayer);
+    if (!byPlayer) {
+      writeSave(this.save);
+      return;
+    }
+    this.changeStanding(() => recordCapture(this.save.standing, owner));
     if (!this.save.cleared.includes(site.id)) this.save.cleared.push(site.id);
-    writeSave(this.save);
     if (site.id === this.model.def.missionOutpost && this.phase === "assault") {
       this.phase = "return";
       this.notify("Outpost cleared! Collect salvage and return to base.", 6);
-    } else if (site.kind === "base") {
+    } else if (now === "player") {
       this.holdBase(site);
+    } else if (now === owner) {
+      this.notify(`${site.name} cleared, but the ${FACTIONS[owner].short} will not give up their home.`, 6);
     } else {
-      this.notify(`${site.name} cleared.`, 5);
+      this.notify(`${site.name} cleared. It stands empty for whoever comes next.`, 5);
     }
+    writeSave(this.save);
   }
 
   notify(text: string, seconds = 3): void {
@@ -641,6 +998,7 @@ export class World {
   }
 
   private respawnPlayer(): void {
+    this.releaseWingmen();
     const base = this.nearestHeldBase(this.player.feet.x, this.player.feet.z);
     this.player.restore();
     this.movePlayer(base.x, base.z, base.id === this.model.def.homeBase ? World.homeYaw(this.model) : 0);
@@ -713,6 +1071,7 @@ export class World {
       }
     }
     if (this.tick % POSITION_SAVE_TICKS === 0 && this.player.state.grounded) this.savePosition();
+    if (this.tick % (WAR.tickSeconds * 60) === 0 && !this.warPaused) this.warTick();
     perfEnd("step.world", t);
     t = perfStart();
     if (this.player.alive) {
@@ -744,8 +1103,9 @@ export class World {
     perfEnd("step.player", t);
     t = perfStart();
 
-    // Only a few of the pilots in the fight may fire at once; see ENEMY_TUNING.maxAttackers.
-    const fighting = this.mechs.filter((m) => m.brain && m.alive && m.brain.state.mode !== "patrol");
+    // Only a few of the pilots fighting the player may fire at once; see ENEMY_TUNING.maxAttackers.
+    // Pilots fighting each other are not rationed.
+    const fighting = this.mechs.filter((m) => m.brain && m.alive && m.brain.state.mode !== "patrol" && m.brain.target === this.player);
     this.attackers = pickAttackers(
       fighting.map((m) => ({ pilot: m, distance: m.brain!.targetDistance, holding: this.attackers.has(m) })),
       ENEMY_TUNING.maxAttackers,
@@ -754,7 +1114,8 @@ export class World {
     for (const mech of this.mechs) {
       if (!mech.brain || !mech.alive) continue;
       const before = mech.brain.state.mode;
-      const intent = mech.brain.think(mech, this.mechs, this.scene, this.tick, dt, this.rng, this.attackers.has(mech));
+      const weaponsFree = mech.brain.target !== this.player || this.attackers.has(mech);
+      const intent = mech.brain.think(mech, this.mechs, this.scene, this.tick, dt, this.rng, weaponsFree, this.hostileRule);
       if (before === "patrol" && mech.brain.state.mode !== "patrol") this.raiseAlarm(mech);
       mech.step(intent, dt);
       this.groundFeedback(mech);
@@ -778,6 +1139,8 @@ export class World {
     if (this.message && (this.message.time -= dt) <= 0) this.message = null;
   }
 
+  private readonly hostileRule = (a: MechEntity, b: MechEntity): boolean => this.hostile(a, b);
+
   // --- Presentation ---
 
   private sectionFractions(): Record<SectionId, number> {
@@ -796,22 +1159,32 @@ export class World {
       return { x: dx * cos - dz * sin, z: dx * sin + dz * cos, kind };
     };
     const blips: RadarBlip[] = [];
-    const base = this.nearestHeldBase(p.x, p.z);
+    const base = this.nearestOf(this.openBases, p.x, p.z);
     blips.push(rel(base.x, base.z, "base"));
-    // Known enemy sites that still have a garrison, when they are near enough to matter.
+    // Known sites held by a hostile faction, when they are near enough to matter.
     for (const site of this.model.sites) {
-      if (!site.garrison || garrisonLeft(this.population, site.id) === 0) continue;
+      const owner = this.ownerOf(site.id);
+      if (!isWarFactionId(owner) || this.attitude(owner) !== "hostile" || this.defendersLeft(site.id) === 0) continue;
       const known = this.save.discovered.includes(site.id) || (site.id === this.model.def.missionOutpost && this.phase === "assault");
       if (known && Math.hypot(site.x - p.x, site.z - p.z) < 1500) blips.push(rel(site.x, site.z, "outpost"));
     }
     for (const pos of this.salvage.positions) blips.push(rel(pos.x, pos.z, "salvage"));
-    for (const mech of this.enemies) blips.push(rel(mech.feet.x, mech.feet.z, "enemy"));
+    for (const mech of this.others) {
+      const attitude = this.attitudeOfMech(mech);
+      blips.push(rel(mech.feet.x, mech.feet.z, attitude === "hostile" ? "enemy" : attitude));
+    }
     return blips;
   }
 
   /** True if a living enemy has a full missile lock on the player. */
   private get lockedOn(): boolean {
     return this.player.alive && this.mechs.some((m) => m !== this.player && m.alive && this.combat.lockedTarget(m) === this.player);
+  }
+
+  /** Who holds the ground the player is on, for the HUD. */
+  private regionHolder(): string {
+    const owner = regionControl(this.war, this.warMap)[this.region.id]?.owner ?? null;
+    return owner === "player" ? "yours" : owner ? FACTIONS[owner].short : "unheld";
   }
 
   private infoText(): string {
@@ -830,9 +1203,23 @@ export class World {
     if (charges > 1) lines.push(`Dash ${"●".repeat(p.state.boostCharges)}${"○".repeat(charges - p.state.boostCharges)}`);
     if (p.state.braced) lines.push("BRACED");
     lines.push(`Scrap ${this.save.scrap}`);
-    lines.push(`${this.region.name} · M: map`);
+    lines.push(`${this.region.name} (${this.regionHolder()}) · M: map`);
+    if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · G: release`);
+    else if (this.alliesNear) lines.push("Press G: call wingmen");
     if (this.atBase && this.player.alive) lines.push("Press H: hangar (refit, repair)");
     return lines.join("\n");
+  }
+
+  /** A mech's name for the target readout, marked if it is not an enemy. */
+  private targetName(mech: MechEntity): string {
+    const attitude = this.attitudeOfMech(mech);
+    return attitude === "hostile" ? mech.name : `${mech.name} (${attitude})`;
+  }
+
+  /** True if an allied pilot is close enough to call as a wingman. */
+  private get alliesNear(): boolean {
+    const p = this.player.feet;
+    return this.mechs.some((m) => m.brain && m.alive && Vector3.Distance(m.feet, p) < WINGMAN_RANGE && this.attitudeOfMech(m) === "allied");
   }
 
   /** Per-frame visual update. `alpha` is the fraction of a step since the last simulation step. */
@@ -857,8 +1244,8 @@ export class World {
     perfEnd("visuals", t);
     t = perfStart();
     const s = this.player.state;
-    const left = garrisonLeft(this.population, this.model.def.missionOutpost);
-    const goal = this.phase === "assault" ? this.missionOutpost : this.nearestHeldBase(this.player.feet.x, this.player.feet.z);
+    const left = this.defendersLeft(this.model.def.missionOutpost);
+    const goal = this.phase === "assault" ? this.missionOutpost : this.nearestOf(this.heldBases, this.player.feet.x, this.player.feet.z);
     const dx = goal.x - this.player.feet.x;
     const dz = goal.z - this.player.feet.z;
     const objective =
@@ -873,7 +1260,7 @@ export class World {
       overheated: s.overheated,
       cockpit: this.cameraRig.mode === "cockpit",
       sections: this.sectionFractions(),
-      target: this.aimedMech ? { name: this.aimedMech.name, health: healthFraction(this.aimedMech.health) } : null,
+      target: this.aimedMech ? { name: this.targetName(this.aimedMech), health: healthFraction(this.aimedMech.health) } : null,
       objective,
       // Without the mouse captured there is no looking around; say how to get it back.
       message:

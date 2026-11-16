@@ -1,5 +1,6 @@
 import type { BiomeId } from "./biomes";
 import type { GarrisonId } from "./encounters";
+import type { WarFactionId } from "./factions";
 
 /**
  * - base: a pad and hangar. Held bases offer the hangar, respawn and fast travel.
@@ -23,9 +24,16 @@ export interface SiteDef {
   x: number;
   z: number;
   radius: number;
-  /** Enemy squads guarding the site. */
+  /**
+   * The squads that guard the site when a faction holds it. Sites with a garrison are what the
+   * war is fought over: they change hands (see `src/sim/war.ts`).
+   */
   garrison?: GarrisonId;
-  /** Bases only: held by the player from the start. */
+  /** Who holds the site in a new game. Defaults to the faction of the region it is in. */
+  faction?: WarFactionId;
+  /** This is its faction's home: it cannot be taken, and the faction recovers here. */
+  home?: boolean;
+  /** Bases only: the player's own, from the start and for good. */
   held?: boolean;
   /** Number of salvage crates lying here until the player takes them. */
   cache?: number;
@@ -38,6 +46,8 @@ export interface RegionDef {
   biome: BiomeId;
   x: number;
   z: number;
+  /** Who holds the region's sites in a new game. */
+  faction: WarFactionId;
 }
 
 /** Seeded placement of minor sites: `count` of them, on the given biomes, spaced apart. */
@@ -102,30 +112,35 @@ export const WORLD: WorldDef = {
   borderWarp: 330,
   siteSpacing: 650,
   regions: [
-    { id: "ashfall-basin", name: "Ashfall Basin", biome: "basin", x: 0, z: 0 },
-    { id: "mirror-pan", name: "Mirror Pan", biome: "saltFlats", x: -2500, z: -2500 },
-    { id: "sunken-quarter", name: "Sunken Quarter", biome: "ruins", x: 100, z: -2700 },
-    { id: "cinder-reach", name: "Cinder Reach", biome: "basin", x: 2600, z: -2400 },
-    { id: "greywall", name: "Greywall Highlands", biome: "highlands", x: -2700, z: 100 },
-    { id: "old-meridian", name: "Old Meridian", biome: "ruins", x: 2700, z: 200 },
-    { id: "tarn-heights", name: "Tarn Heights", biome: "highlands", x: -2400, z: 2600 },
-    { id: "white-reach", name: "White Reach", biome: "saltFlats", x: 200, z: 2700 },
-    { id: "kestrel-rise", name: "Kestrel Rise", biome: "highlands", x: 2600, z: 2600 },
+    { id: "ashfall-basin", name: "Ashfall Basin", biome: "basin", x: 0, z: 0, faction: "combine" },
+    { id: "mirror-pan", name: "Mirror Pan", biome: "saltFlats", x: -2500, z: -2500, faction: "wardens" },
+    { id: "sunken-quarter", name: "Sunken Quarter", biome: "ruins", x: 100, z: -2700, faction: "syndicate" },
+    { id: "cinder-reach", name: "Cinder Reach", biome: "basin", x: 2600, z: -2400, faction: "syndicate" },
+    { id: "greywall", name: "Greywall Highlands", biome: "highlands", x: -2700, z: 100, faction: "wardens" },
+    { id: "old-meridian", name: "Old Meridian", biome: "ruins", x: 2700, z: 200, faction: "combine" },
+    { id: "tarn-heights", name: "Tarn Heights", biome: "highlands", x: -2400, z: 2600, faction: "drifters" },
+    { id: "white-reach", name: "White Reach", biome: "saltFlats", x: 200, z: 2700, faction: "drifters" },
+    { id: "kestrel-rise", name: "Kestrel Rise", biome: "highlands", x: 2600, z: 2600, faction: "combine" },
   ],
   sites: [
     // Ashfall Basin: where the game starts.
     { id: "drifters-rest", name: "Drifters' Rest", kind: "base", layout: "base", x: -300, z: -280, radius: 55, held: true },
-    { id: "kestrel-outpost", name: "Kestrel Outpost", kind: "outpost", layout: "outpost", x: 240, z: 230, radius: 75, garrison: "kestrelOutpost" },
+    { id: "kestrel-outpost", name: "Kestrel Outpost", kind: "outpost", layout: "outpost", x: 240, z: 230, radius: 75, garrison: "kestrelOutpost", faction: "combine" },
     { id: "ashfall-wrecks", name: "Ashfall Wreck Field", kind: "wreck", layout: "wreckField", x: -20, z: 10, radius: 45 },
-    // Bases to take: each becomes a fast-travel point once its guards are gone.
+    // Bases: a base the player clears becomes theirs (hangar, respawn, fast travel) until it is retaken.
     { id: "saltwatch", name: "Saltwatch Station", kind: "base", layout: "base", x: -2250, z: -2150, radius: 55, garrison: "baseGuard" },
     { id: "meridian-gate", name: "Meridian Gate", kind: "base", layout: "base", x: 2350, z: 350, radius: 55, garrison: "baseGuard" },
-    { id: "tarn-lookout", name: "Tarn Lookout", kind: "base", layout: "base", x: -2050, z: 2350, radius: 55 },
+    { id: "tarn-lookout", name: "Tarn Lookout", kind: "base", layout: "base", x: -2050, z: 2350, radius: 55, garrison: "baseGuard" },
     { id: "cinder-station", name: "Cinder Station", kind: "base", layout: "base", x: 2250, z: -2150, radius: 55, garrison: "baseGuard" },
-    // Enemy strongholds.
-    { id: "citadel", name: "Combine Citadel", kind: "outpost", layout: "outpost", x: 2500, z: 2450, radius: 80, garrison: "citadel" },
-    { id: "quarry-post", name: "Quarry Post", kind: "outpost", layout: "outpost", x: -2450, z: 350, radius: 75, garrison: "relayPost" },
+    // Faction homes: one each, never taken.
+    { id: "citadel", name: "Combine Citadel", kind: "outpost", layout: "outpost", x: 2500, z: 2450, radius: 80, garrison: "citadel", home: true },
+    { id: "quarry-post", name: "Quarry Hold", kind: "outpost", layout: "outpost", x: -2450, z: 350, radius: 75, garrison: "stronghold", home: true },
+    { id: "compact-yard", name: "Compact Yard", kind: "outpost", layout: "outpost", x: -2750, z: 2850, radius: 75, garrison: "stronghold", home: true },
+    { id: "ember-foundry", name: "Ember Foundry", kind: "outpost", layout: "outpost", x: 2800, z: -2750, radius: 75, garrison: "stronghold", home: true },
+    // Outposts on the borders.
     { id: "pan-relay", name: "Pan Relay", kind: "outpost", layout: "outpost", x: 350, z: 2550, radius: 75, garrison: "relayPost" },
+    { id: "sunken-bastion", name: "Sunken Bastion", kind: "outpost", layout: "outpost", x: -550, z: -2950, radius: 75, garrison: "relayPost" },
+    { id: "brine-works", name: "Brine Works", kind: "outpost", layout: "outpost", x: -2950, z: -2850, radius: 75, garrison: "relayPost" },
     // Landmarks.
     { id: "the-needle", name: "The Needle", kind: "landmark", layout: "spire", x: 150, z: -2550, radius: 18 },
     { id: "broken-span", name: "Broken Span", kind: "landmark", layout: "arch", x: -1500, z: 1250, radius: 22 },
@@ -136,11 +151,11 @@ export const WORLD: WorldDef = {
     {
       kind: "camp",
       layout: "camp",
-      count: 5,
+      count: 8,
       biomes: ["basin", "highlands", "ruins", "saltFlats"],
       radius: 34,
       garrison: "camp",
-      names: ["Dust Camp", "Ridge Camp", "Rubble Camp", "Brine Camp", "Hollow Camp"],
+      names: ["Dust Camp", "Ridge Camp", "Rubble Camp", "Brine Camp", "Hollow Camp", "Cairn Camp", "Ashpit Camp", "Lantern Camp"],
     },
     {
       kind: "depot",

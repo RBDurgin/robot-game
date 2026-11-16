@@ -3,7 +3,8 @@ import { FRAMES } from "../../src/data/frames";
 import { ENEMY_LOADOUTS, STARTING_LOADOUT, type Loadout } from "../../src/data/loadouts";
 import { PLATING } from "../../src/data/parts";
 import { WEAPONS } from "../../src/data/weapons";
-import { GARRISONS, type SquadDef } from "../../src/data/encounters";
+import { GARRISONS, RAID_SQUAD, type SquadDef } from "../../src/data/encounters";
+import { FACTIONS, WAR_FACTION_IDS, type SquadMember } from "../../src/data/factions";
 
 const SQUADS: SquadDef[] = Object.values(GARRISONS).flat();
 import { addItem, fitToFrame, itemsUsed, loadoutProblems, loadoutStats, startingInventory } from "../../src/sim/loadout";
@@ -49,17 +50,24 @@ describe("loadout", () => {
     expect(loadoutProblems(frame, build, itemsUsed(build))).toContain("No weapon fitted");
   });
 
-  it("every enemy in every squad carries a loadout its frame can deploy", () => {
-    for (const squad of SQUADS) {
-      for (const member of squad.members) {
+  it("every pilot on every faction's roster carries a loadout its frame can deploy, unchanged", () => {
+    for (const id of WAR_FACTION_IDS) {
+      for (const [slot, member] of Object.entries(FACTIONS[id].roster) as [string, SquadMember][]) {
         const loadout = ENEMY_LOADOUTS[member.loadout];
-        expect(loadoutProblems(FRAMES[member.frame], loadout, itemsUsed(loadout)), `${squad.id} ${member.loadout}`).toEqual([]);
+        expect(loadoutProblems(FRAMES[member.frame], loadout, itemsUsed(loadout)), `${id} ${slot}`).toEqual([]);
+        expect(fitToFrame(FRAMES[member.frame], loadout), `${id} ${slot}`).toEqual(loadout);
       }
     }
   });
 
-  it("squads field more than one frame", () => {
-    expect(new Set(SQUADS.flatMap((s) => s.members.map((m) => m.frame))).size).toBeGreaterThan(1);
+  it("every faction fields more than one kind of pilot, and no two fight the same way", () => {
+    const styles = WAR_FACTION_IDS.map((id) => {
+      const roster = FACTIONS[id].roster;
+      const jobs = [...SQUADS.flatMap((s) => s.members), ...RAID_SQUAD];
+      expect(new Set(jobs.map((slot) => `${roster[slot].frame}/${roster[slot].loadout}`)).size, id).toBeGreaterThan(2);
+      return JSON.stringify(roster);
+    });
+    expect(new Set(styles).size).toBe(WAR_FACTION_IDS.length);
   });
 });
 

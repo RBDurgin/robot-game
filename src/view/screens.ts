@@ -4,7 +4,7 @@ import { PLATING, type PlatingId } from "../data/parts";
 import { WEAPONS, type WeaponId } from "../data/weapons";
 import type { Settings } from "../game/save";
 import type { WorldModel } from "../sim/terrain";
-import { drawMap, type MapSite } from "./mapView";
+import { drawMap, type MapSite, type MapTerritory } from "./mapView";
 import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type Inventory, type ItemId } from "../sim/loadout";
 
 type Child = Node | string;
@@ -33,7 +33,8 @@ const CONTROLS: [string, string][] = [
   ["E / Middle mouse", "Fire shoulder weapons (heavy frame)"],
   ["F", "Melee strike"],
   ["V", "Switch third-person / cockpit view"],
-  ["H", "Hangar (at a base you hold)"],
+  ["H", "Hangar (at a base you hold, or an ally's)"],
+  ["G", "Call allied pilots to your wing, or release them"],
   ["M", "World map and fast travel"],
   ["Esc", "Pause"],
 ];
@@ -63,6 +64,10 @@ export interface MapOptions {
   region: string;
   /** The places the player knows about. */
   sites: MapSite[];
+  /** Who controls each region. */
+  territory: MapTerritory[];
+  /** The factions at war and where the player stands with each. */
+  factions: { name: string; style: string; color: string; standing: number; attitude: "hostile" | "neutral" | "allied"; sites: number }[];
   /** Number of places in the world, found or not. */
   total: number;
   /** Why fast travel is unavailable right now, or null if it is available. */
@@ -170,7 +175,7 @@ export class Screens {
       ...(opts.isStart
         ? [
             el("p", "", [
-              "The Kestrel Combine has fortified an outpost to the north-east. Clear out its garrison, salvage what they leave behind, and return to base. Beyond the basin lie the Marches: salt flats, highlands and ruined cities, with bases to take and places to find.",
+              "The Kestrel Combine has fortified an outpost to the north-east. Clear out its garrison, salvage what they leave behind, and return to base. Beyond the basin four factions are fighting over the Marches. You fly for none of them: who shoots at you, and who fights beside you, depends on what you do.",
             ]),
           ]
         : []),
@@ -293,21 +298,32 @@ export class Screens {
     canvas.setAttribute("aria-label", "World map");
     drawMap(canvas, opts);
 
-    const bases = opts.sites.filter((s) => s.held);
+    const bases = opts.sites.filter((s) => s.travel);
     const here = (s: MapSite): boolean => Math.hypot(opts.player.x - s.site.x, opts.player.z - s.site.z) < s.site.radius;
     const travel = bases.map((s) => {
-      const b = button(`Travel to ${s.site.name}`, () => opts.onTravel(s.site.id), "secondary");
+      const b = button(`Travel to ${s.site.name}${s.held ? "" : ` (${s.owner})`}`, () => opts.onTravel(s.site.id), "secondary");
       b.disabled = opts.travelBlocked !== null || here(s);
       return b;
     });
     const known = [...opts.sites].sort((a, b) => a.site.name.localeCompare(b.site.name));
+    const factions = opts.factions.map((f) => {
+      const swatch = el("span", "swatch");
+      swatch.style.background = f.color;
+      const row = el("li", f.attitude, [swatch, `${f.name}: ${f.attitude} (${f.standing > 0 ? "+" : ""}${f.standing}) · ${f.sites} ${f.sites === 1 ? "site" : "sites"}`]);
+      row.title = f.style;
+      return row;
+    });
+    const tag = (s: MapSite): string => (s.held ? " (held)" : s.owner ? ` (${s.owner}${s.hostile ? ", hostile" : ""})` : "") + (s.raided ? " · raid incoming" : "");
     const side = el("div", "mapSide", [
       el("p", "", [`You are in ${opts.region}.`]),
+      el("h2", "", ["The war"]),
+      el("ul", "factions", factions),
+      el("p", "dim", ["Regions take the colour of whoever holds most of them; stripes mean the region is fought over."]),
       el("h2", "", ["Fast travel"]),
-      el("p", "dim", [opts.travelBlocked ?? "Travel to any base you hold."]),
+      el("p", "dim", [opts.travelBlocked ?? "Travel to any base you hold, or an ally's."]),
       el("div", "travel", travel),
       el("h2", "", [`Places found · ${opts.sites.length} of ${opts.total}`]),
-      el("ul", "places", known.map((s) => el("li", s.held ? "held" : s.hostile ? "hostile" : "", [`${s.site.name}${s.held ? " (held)" : s.hostile ? " (hostile)" : ""}`]))),
+      el("ul", "places", known.map((s) => el("li", s.held ? "held" : s.hostile ? "hostile" : "", [`${s.site.name}${tag(s)}`]))),
       el("div", "actions", [button("Close map", opts.onClose)]),
     ]);
     this.show(el("div", "panel mapPanel", [el("h1", "", [opts.model.def.name]), el("div", "mapBody", [canvas, side])]));

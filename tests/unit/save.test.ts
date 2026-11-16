@@ -26,7 +26,17 @@ describe("parseSave", () => {
     save.loadout = { weapons: { armR: "lanceBeam", shoulderL: "seekerRack" }, plating: "heavyPlating" };
     save.inventory = { lanceBeam: 1, seekerRack: 2, heavyPlating: 1 };
     save.scrap = 12;
+    save.standing.wardens = -40;
+    save.war = { tick: 12, sites: { "pan-relay": { owner: "combine", troops: 2 } }, raids: [], nextRaid: 1 };
     expect(parseSave(JSON.parse(JSON.stringify(save)))).toEqual(save);
+  });
+
+  it("loads a save from before the faction war", () => {
+    const save = parseSave({ frame: "light", held: ["tarn-lookout"], cleared: ["kestrel-outpost"], discovered: ["tarn-lookout"] });
+    expect(save.held).toEqual(["tarn-lookout"]);
+    expect(save.cleared).toEqual(["kestrel-outpost"]);
+    expect(save.war).toBeNull();
+    expect(save.standing).toEqual(freshSave().standing);
   });
 
   it("falls back to defaults for anything it does not recognise", () => {

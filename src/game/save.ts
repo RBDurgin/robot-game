@@ -1,6 +1,8 @@
 import { HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
 import { isPlatingId, isWeaponId, startingInventory, type Inventory } from "../sim/loadout";
+import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
+import type { WarState } from "../sim/war";
 
 export interface Settings {
   /** Radians of look per pixel of mouse travel. */
@@ -21,12 +23,20 @@ export interface SaveData {
   position: SavedPosition | null;
   /** Ids of sites the player has found. They show on the map. */
   discovered: string[];
-  /** Ids of bases the player has taken, besides those held from the start. */
+  /** Ids of bases the player holds, besides their home. Kept in step with the war. */
   held: string[];
-  /** Ids of sites whose garrison has been destroyed. */
+  /** Ids of sites whose garrison the player has destroyed at some time. */
   cleared: string[];
   /** Ids of sites whose salvage cache has been taken. */
   looted: string[];
+  /** The player's standing with each faction. */
+  standing: Standing;
+  /**
+   * The faction war, or null before the first game (and in saves from before phase 4, where
+   * `held` and `cleared` say what the player had done). Checked against the world when the game
+   * starts, by `parseWar`.
+   */
+  war: WarState | null;
 }
 
 export interface SavedPosition {
@@ -51,6 +61,8 @@ export function freshSave(): SaveData {
     held: [],
     cleared: [],
     looted: [],
+    standing: startingStanding(),
+    war: null,
   };
 }
 
@@ -116,6 +128,10 @@ export function parseSave(raw: unknown): SaveData {
   save.held = parseIds(data.held);
   save.cleared = parseIds(data.cleared);
   save.looted = parseIds(data.looted);
+  // Saves from before the faction war have neither of these: the war starts afresh around
+  // what the player had taken and cleared.
+  save.standing = parseStanding(data.standing);
+  save.war = data.war && typeof data.war === "object" ? (data.war as WarState) : null;
   return save;
 }
 

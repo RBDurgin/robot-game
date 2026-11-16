@@ -52,7 +52,7 @@ class Bar {
   }
 }
 
-export type BlipKind = "enemy" | "salvage" | "base" | "outpost";
+export type BlipKind = "enemy" | "neutral" | "allied" | "salvage" | "base" | "outpost";
 
 /** A radar contact, in metres relative to the player: +x is to the right, +z is ahead. */
 export interface RadarBlip {
@@ -63,7 +63,7 @@ export interface RadarBlip {
 
 const RADAR_RANGE = 260;
 const RADAR_RADIUS = 62;
-const BLIP_COLORS: Record<BlipKind, string> = { enemy: "#ff5a4a", salvage: "#4dffa6", base: "#39c2ff", outpost: "#ffa630" };
+const BLIP_COLORS: Record<BlipKind, string> = { enemy: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff", salvage: "#4dffa6", base: "#39c2ff", outpost: "#ffa630" };
 
 export interface HudState {
   energy: number;
@@ -72,7 +72,7 @@ export interface HudState {
   cockpit: boolean;
   /** Remaining health of each section, 0..1. */
   sections: Record<SectionId, number>;
-  /** Hostile under the crosshair. */
+  /** Mech under the crosshair. */
   target: { name: string; health: number } | null;
   objective: string;
   /** Short-lived notice, or null. */
@@ -283,17 +283,22 @@ export class Hud {
     }
   }
 
-  /** Show a marker that follows a hostile mech. */
-  addMarker(node: TransformNode): void {
+  /** Show a marker that follows a mech, coloured by how it regards the player. */
+  addMarker(node: TransformNode, color: string): void {
     const m = new Rectangle("marker");
     m.width = "9px";
     m.height = "9px";
     m.thickness = 0;
-    m.background = "#ff5a4a";
+    m.background = color;
     m.rotation = Math.PI / 4;
     this.ui.addControl(m);
     m.linkWithMesh(node);
     this.markers.set(node, m);
+  }
+
+  setMarkerColor(node: TransformNode, color: string): void {
+    const m = this.markers.get(node);
+    if (m) m.background = color;
   }
 
   removeMarker(node: TransformNode): void {
@@ -319,7 +324,7 @@ export class Hud {
       // Contacts beyond radar range sit on the rim, so you still get their direction.
       const d = Math.hypot(c.x, c.z);
       const k = (Math.min(d, RADAR_RANGE) / RADAR_RANGE) * RADAR_RADIUS / Math.max(d, 0.001);
-      const size = c.kind === "enemy" || c.kind === "salvage" ? 6 : 9;
+      const size = c.kind === "base" || c.kind === "outpost" ? 9 : 6;
       blip.width = `${size}px`;
       blip.height = `${size}px`;
       blip.left = `${c.x * k}px`;

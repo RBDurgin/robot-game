@@ -1,6 +1,5 @@
 import { Scene, Vector3 } from "@babylonjs/core";
-import { areHostile } from "../data/factions";
-import { createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiState } from "../sim/ai/brain";
+import { blocksFire, createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiState } from "../sim/ai/brain";
 import { healthFraction } from "../sim/damage";
 import type { Intent } from "../sim/intent";
 import type { Vec3 } from "../sim/math";
@@ -19,13 +18,18 @@ export class AiController {
   private readonly phase = nextPhase++ % SENSE_INTERVAL;
   private targetVisible = false;
   private blockedAhead = false;
+  private fireBlocked = false;
+  /** The hostile this pilot is fighting or watching: the nearest one alive, as of the last think. */
+  target: MechEntity | null = null;
+  /** Wingmen: the mech to stay close to when there is nothing to fight. */
+  follow: MechEntity | null = null;
 
   constructor(
     private readonly patrol: Vec3[],
     private readonly home: Vec3,
     patrolIndex: number,
     /** Pilots in the same squad share alarms. */
-    readonly squadId: string,
+    public squadId: string,
     private readonly cfg: AiConfig = DEFAULT_AI,
   ) {
     this.state = createAiState(patrolIndex);
@@ -38,11 +42,21 @@ export class AiController {
   /** Distance to the nearest living hostile, as of the last think. */
   targetDistance = Infinity;
 
-  think(self: MechEntity, mechs: readonly MechEntity[], scene: Scene, tick: number, dt: number, rng: () => number, weaponsFree: boolean): Intent {
+  think(
+    self: MechEntity,
+    mechs: readonly MechEntity[],
+    scene: Scene,
+    tick: number,
+    dt: number,
+    rng: () => number,
+    weaponsFree: boolean,
+    /** Who attacks whom on sight; with three or more sides this is not just "everyone else". */
+    hostile: (a: MechEntity, b: MechEntity) => boolean,
+  ): Intent {
     let target: MechEntity | null = null;
     let best = Infinity;
     for (const other of mechs) {
-      if (other === self || !other.alive || !areHostile(other.faction, self.faction)) continue;
+      if (other === self || !other.alive || !hostile(self, other)) continue;
       const d = Vector3.DistanceSquared(other.feet, self.feet);
       if (d < best) {
         best = d;
@@ -51,10 +65,23 @@ export class AiController {
     }
 
     this.targetDistance = Math.sqrt(best);
+    this.target = target;
 
     const eye = new Vector3(self.feet.x, self.feet.y + self.frame.height * 0.7, self.feet.z);
     if (tick % SENSE_INTERVAL === this.phase) {
       this.targetVisible = target !== null && raycastWorld(scene, eye, target.center) === null;
+      // Shots pass through friends (there is no friendly fire between AI pilots), but a pilot
+      // who fires through them looks wrong and wastes heat on a target it cannot see properly.
+      this.fireBlocked = false;
+      if (target) {
+        for (const other of mechs) {
+          if (other === self || other === target || !other.alive || hostile(self, other)) continue;
+          if (blocksFire(eye, target.center, other.center, other.frame.radius + 1.2)) {
+            this.fireBlocked = true;
+            break;
+          }
+        }
+      }
       const s = self.state;
       const moving = self.horizontalSpeed > 1;
       const dirX = moving ? s.vel.x / self.horizontalSpeed : Math.sin(s.legsYaw);
@@ -75,6 +102,8 @@ export class AiController {
         target: target ? { center: target.center, vel: target.state.vel, visible: this.targetVisible } : null,
         weaponsFree,
         blockedAhead: this.blockedAhead,
+        fireBlocked: this.fireBlocked,
+        follow: this.follow?.alive ? this.follow.feet : null,
         patrol: this.patrol,
         home: this.home,
       },

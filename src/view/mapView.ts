@@ -1,5 +1,5 @@
 import type { Site, WorldModel } from "../sim/terrain";
-import { BIOME_COUNT, sampleTerrain } from "../sim/terrain";
+import { BIOME_COUNT, regionAt, sampleTerrain } from "../sim/terrain";
 import { groundColor } from "./terrain";
 
 /** Pixels along one side of the terrain picture. Each is sampled once, the first time the map opens. */
@@ -46,21 +46,89 @@ function terrainPicture(model: WorldModel): HTMLCanvasElement {
   return canvas;
 }
 
+const regionCache = new WeakMap<WorldModel, Uint8Array>();
+
+/** Which region each pixel of the terrain picture is in, as an index into the world's regions. */
+function regionPicture(model: WorldModel): Uint8Array {
+  const cached = regionCache.get(model);
+  if (cached) return cached;
+  const n = TERRAIN_PIXELS;
+  const size = model.def.size;
+  const out = new Uint8Array(n * n);
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      const region = regionAt(model.def, -size / 2 + ((col + 0.5) * size) / n, size / 2 - ((row + 0.5) * size) / n);
+      out[row * n + col] = model.def.regions.indexOf(region);
+    }
+  }
+  regionCache.set(model, out);
+  return out;
+}
+
+/** Who controls a region, as the map shows it. */
+export interface MapTerritory {
+  regionId: string;
+  /** The holder's colour as #rrggbb, or null if nobody holds anything there. */
+  color: string | null;
+  /** Fought over: drawn striped. */
+  contested: boolean;
+}
+
+/** A wash of each region's holder's colour over the terrain, striped where the region is fought over. */
+function territoryPicture(model: WorldModel, territory: MapTerritory[]): HTMLCanvasElement {
+  const n = TERRAIN_PIXELS;
+  const regions = regionPicture(model);
+  const byIndex = model.def.regions.map((r) => {
+    const t = territory.find((t) => t.regionId === r.id);
+    const rgb = t?.color ? parseInt(t.color.slice(1), 16) : null;
+    return { rgb, contested: t?.contested ?? false };
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = n;
+  const ctx = canvas.getContext("2d")!;
+  const image = ctx.createImageData(n, n);
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      const i = row * n + col;
+      const here = regions[i]!;
+      const border = (col + 1 < n && regions[i + 1] !== here) || (row + 1 < n && regions[i + n] !== here);
+      const { rgb, contested } = byIndex[here]!;
+      if (border) {
+        image.data.set([12, 14, 18, 150], i * 4);
+      } else if (rgb !== null) {
+        const stripe = contested && (row + col) % 7 < 3;
+        image.data.set([(rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, stripe ? 30 : 85], i * 4);
+      }
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
 export interface MapSite {
   site: Site;
   /** A base the player holds. */
   held: boolean;
-  /** Still has a living garrison. */
+  /** A base the player can travel to: their own or an ally's. */
+  travel: boolean;
+  /** Held by a faction that attacks the player on sight. */
   hostile: boolean;
+  /** Short name of the faction holding it, or null. */
+  owner: string | null;
+  /** The holder's colour as #rrggbb, or null if nobody holds it. */
+  color: string | null;
+  /** A raid is on its way here. */
+  raided: boolean;
 }
 
 export interface MapContent {
   model: WorldModel;
   player: { x: number; z: number; yaw: number };
   sites: MapSite[];
+  territory: MapTerritory[];
 }
 
-const SITE_COLORS = { held: "#39c2ff", hostile: "#ff5a4a", neutral: "#f2e9c9" };
+const UNHELD_COLOR = "#f2e9c9";
 
 /** Draw the world map: terrain, region names, the places the player knows, and the player. */
 export function drawMap(canvas: HTMLCanvasElement, content: MapContent): void {
@@ -72,6 +140,7 @@ export function drawMap(canvas: HTMLCanvasElement, content: MapContent): void {
   const ctx = canvas.getContext("2d")!;
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(terrainPicture(model), 0, 0, w, w);
+  ctx.drawImage(territoryPicture(model, content.territory), 0, 0, w, w);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -86,15 +155,23 @@ export function drawMap(canvas: HTMLCanvasElement, content: MapContent): void {
 
   ctx.font = `${Math.round(w / 60)}px system-ui, sans-serif`;
   ctx.textAlign = "left";
-  for (const { site, held, hostile } of content.sites) {
+  for (const { site, color, raided } of content.sites) {
     const x = px(site.x);
     const y = py(site.z);
     const r = site.kind === "base" || site.kind === "outpost" ? w / 110 : w / 170;
-    ctx.fillStyle = held ? SITE_COLORS.held : hostile ? SITE_COLORS.hostile : SITE_COLORS.neutral;
-    ctx.strokeStyle = "#0b0d10";
+    if (raided) {
+      // A ring: someone is marching on this place.
+      ctx.strokeStyle = "#ffd23c";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 2.4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = color ?? UNHELD_COLOR;
+    ctx.strokeStyle = color ? "#ffffff" : "#0b0d10";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    // Bases are squares, enemy sites diamonds, everything else a dot.
+    // Bases are squares, outposts and camps diamonds, everything else a dot. Colour is the holder's.
     if (site.kind === "base") ctx.rect(x - r, y - r, r * 2, r * 2);
     else if (site.kind === "outpost" || site.kind === "camp") {
       ctx.moveTo(x, y - r * 1.3);

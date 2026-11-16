@@ -17,6 +17,9 @@ export const ENEMY_LOADOUTS = {
   marksman: { weapons: { armR: "slugCannon" }, plating: "lightPlating" },
   skirmisher: { weapons: { armL: "swarmPod", armR: "scatterGun" }, plating: "lightPlating" },
   lancer: { weapons: { armR: "lanceBeam" }, plating: "lightPlating" },
+  raider: { weapons: { armL: "swarmPod", armR: "pulseRifle" }, plating: "lightPlating" },
+  brawler: { weapons: { armL: "arcLauncher", armR: "scatterGun" }, plating: "standardPlating" },
+  bulwark: { weapons: { armL: "arcLauncher", armR: "slugCannon" }, plating: "heavyPlating" },
   bombard: { weapons: { armR: "slugCannon", shoulderR: "seekerRack", shoulderL: "seekerRack" }, plating: "heavyPlating" },
 } satisfies Record<string, Loadout>;
 

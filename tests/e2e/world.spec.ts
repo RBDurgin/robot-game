@@ -127,16 +127,19 @@ test("open world: discovery, taking a base, the map, fast travel and saved progr
   await page.keyboard.press("KeyM");
   expect(await page.evaluate(() => window.__game!.world.mode)).toBe("playing");
 
-  // An abandoned base far to the north-west is taken by walking in.
+  // The war is held still so that who holds what does not change under the test.
+  await page.evaluate(() => (window.__game!.world.warPaused = true));
+
+  // A base of the Drifter Compact, far to the north-west. They count the player an ally, so
+  // it is open to them without being theirs.
   await goTo(page, -2050, 2350);
   const taken = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { discovered: w.save.discovered, held: w.save.held, atBase: w.atBase, bases: w.heldBases.map((b) => b.id) };
+    return { discovered: w.save.discovered, held: w.save.held, atBase: w.atBase, bases: w.heldBases.map((b) => b.id), owner: w.ownerOf("tarn-lookout"), enemies: w.enemies.length };
   });
   expect(taken.discovered).toContain("tarn-lookout");
-  expect(taken.held).toEqual(["tarn-lookout"]);
-  expect(taken.atBase).toBe(true);
-  // A held base has a working hangar.
+  expect(taken).toMatchObject({ held: [], atBase: true, bases: ["drifters-rest"], owner: "drifters", enemies: 0 });
+  // An ally's base has a working hangar.
   await page.keyboard.press("KeyH");
   await expect(page.getByRole("heading", { name: /Hangar/ })).toBeVisible();
   await page.getByRole("button", { name: "Repair and deploy" }).click();
@@ -164,7 +167,8 @@ test("open world: discovery, taking a base, the map, fast travel and saved progr
 
   // Enemies wake as the player nears a camp, keep their damage while asleep, and stay dead.
   const camp = await page.evaluate(() => {
-    const s = window.__game!.world.model.sites.find((s) => s.kind === "camp")!;
+    const w = window.__game!.world;
+    const s = w.model.sites.find((s) => s.kind === "camp" && w.ownerOf(s.id) === "combine")!;
     return { id: s.id, x: s.x, z: s.z };
   });
   await goTo(page, camp.x - 80, camp.z);
@@ -201,13 +205,15 @@ test("open world: discovery, taking a base, the map, fast travel and saved progr
   await waitTicks(page, 5);
   expect(await page.evaluate(() => window.__game!.world.save.cleared)).toEqual([camp.id]);
 
-  // The map now shows what has been found, and fast travel goes to either held base.
+  // The map now shows what has been found, and fast travel goes to the player's base or an ally's.
   await page.keyboard.press("KeyM");
   await expect(page.getByText(/Places found · [4-9] of \d+/)).toBeVisible();
-  await expect(page.locator(".places")).toContainText("Tarn Lookout (held)");
+  await expect(page.locator(".places")).toContainText("Tarn Lookout (Drifters)");
   await expect(page.locator(".places")).toContainText(depot.name);
   await page.screenshot({ path: `${SHOTS}/23-world-map.png` });
-  await page.getByRole("button", { name: "Travel to Tarn Lookout" }).click();
+  await expect(page.locator(".factions")).toContainText("Drifter Compact: allied");
+  await expect(page.locator(".factions")).toContainText("Kestrel Combine: hostile");
+  await page.getByRole("button", { name: "Travel to Tarn Lookout (Drifters)" }).click();
   await waitTicks(page, 30);
   const arrived = await page.evaluate(() => {
     const w = window.__game!.world;
@@ -228,9 +234,10 @@ test("open world: discovery, taking a base, the map, fast travel and saved progr
       cleared: w.save.cleared,
       discovered: w.save.discovered.length,
       campLeft: w.population.filter((r) => r.siteId === w.save.cleared[0]).length,
+      campOwner: w.ownerOf(w.save.cleared[0]!),
     };
   });
-  expect(reloaded).toEqual({ base: "tarn-lookout", held: ["tarn-lookout"], looted: [depot.id], cleared: [camp.id], discovered: reloaded.discovered, campLeft: 0 });
+  expect(reloaded).toEqual({ base: "tarn-lookout", held: [], looted: [depot.id], cleared: [camp.id], discovered: reloaded.discovered, campLeft: 0, campOwner: null });
   expect(reloaded.discovered).toBeGreaterThanOrEqual(4);
 
   expect(errors).toEqual([]);

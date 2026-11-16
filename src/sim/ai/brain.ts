@@ -107,8 +107,32 @@ export interface AiView {
   weaponsFree: boolean;
   /** True if static geometry is close in front of the legs. */
   blockedAhead: boolean;
+  /** True if a mech this pilot will not shoot stands between it and its target. */
+  fireBlocked?: boolean;
+  /** Wingmen: where the pilot they are escorting stands. Followed whenever there is nothing to fight. */
+  follow?: Vec3 | null;
   patrol: Vec3[];
   home: Vec3;
+}
+
+/** Wingmen stop this close to their leader, and sprint to catch up beyond the second distance. */
+const FOLLOW_NEAR = 16;
+const FOLLOW_FAR = 55;
+
+/**
+ * Whether `blocker` (a sphere of the given radius) stands on the line of fire from `eye` to
+ * `target`. Used to stop pilots firing through their friends.
+ */
+export function blocksFire(eye: Vec3, target: Vec3, blocker: Vec3, radius: number): boolean {
+  const dx = target.x - eye.x;
+  const dy = target.y - eye.y;
+  const dz = target.z - eye.z;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 < 1e-6) return false;
+  const t = ((blocker.x - eye.x) * dx + (blocker.y - eye.y) * dy + (blocker.z - eye.z) * dz) / len2;
+  // Beside or behind the shooter, or beyond the target: not in the way.
+  if (t <= 0.02 || t >= 0.98) return false;
+  return Math.hypot(eye.x + dx * t - blocker.x, eye.y + dy * t - blocker.y, eye.z + dz * t - blocker.z) < radius;
 }
 
 /** Convert a desired world-space travel direction into strafe/forward input relative to the aim yaw. */
@@ -154,6 +178,8 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       }
     } else {
       ai.reactionTimer = 0;
+      // An alarm with nobody to fight is forgotten, not saved up for the next stranger.
+      if (!target) ai.alerted = false;
     }
   } else if (!target) {
     ai.mode = "patrol";
@@ -183,7 +209,15 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
   if (ai.jumpTimer > 0) ai.jumpTimer -= dt;
 
   // --- Behaviour ---
-  if (ai.mode === "patrol" || !target) {
+  if ((ai.mode === "patrol" || !target) && view.follow) {
+    // Keep station on the leader: close up when left behind, stand when near.
+    const gap = distanceXZ(view.feet, view.follow);
+    aimAt(intent, view.eye, { x: view.follow.x, y: view.eye.y, z: view.follow.z });
+    intent.aimPoint = null;
+    intent.moveZ = gap > FOLLOW_NEAR ? 1 : 0;
+    intent.sprint = gap > FOLLOW_FAR;
+    trackStuck(ai, view, intent.moveZ !== 0, dt);
+  } else if (ai.mode === "patrol" || !target) {
     const goal = view.patrol[ai.patrolIndex % Math.max(1, view.patrol.length)] ?? view.home;
     if (distanceXZ(view.feet, goal) < 7) ai.patrolIndex = (ai.patrolIndex + 1) % Math.max(1, view.patrol.length);
     aimAt(intent, view.eye, { x: goal.x, y: view.eye.y, z: goal.z });
@@ -202,6 +236,8 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
     aimAt(intent, view.eye, focus, ai.jitterYaw, ai.jitterPitch);
 
     ai.strafeTimer -= dt;
+    // A friend in the way: sidestep for a clear shot rather than wait behind them.
+    if (view.fireBlocked && ai.strafeTimer > 0.8) ai.strafeTimer = 0.8;
     if (ai.strafeTimer <= 0 || (view.blockedAhead && ai.strafeTimer < 1)) {
       ai.strafeTimer = 1.4 + rng() * 2.2;
       ai.strafeDir = ai.strafeDir === 1 ? -1 : 1;
@@ -217,7 +253,7 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       const far = view.weaponsFree ? cfg.maxRange : cfg.maxRange * 1.3;
       const radial = !target.visible || targetDist > far ? 1 : targetDist < near ? -1 : 0;
       intent.moveZ = radial;
-      intent.moveX = target.visible ? ai.strafeDir * cfg.strafe : 0;
+      intent.moveX = target.visible ? ai.strafeDir * (view.fireBlocked ? Math.max(cfg.strafe, 0.8) : cfg.strafe) : 0;
       intent.sprint = radial === 1 && targetDist > cfg.maxRange * 1.5;
     }
     trackStuck(ai, view, intent.moveX !== 0 || intent.moveZ !== 0, dt);
@@ -228,7 +264,7 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
       ai.firing = !ai.firing;
       ai.burstTimer = ai.firing ? 0.9 + rng() * 0.9 : 0.6 + rng() * 0.8;
     }
-    if (target.visible && view.weaponsFree) {
+    if (target.visible && view.weaponsFree && !view.fireBlocked) {
       const inReach = targetDist < cfg.fireRange;
       intent.firePrimary = inReach && ai.firing && view.heatFrac < 0.85;
       intent.fireSecondary = inReach && targetDist > 25 && view.heatFrac < 0.6;

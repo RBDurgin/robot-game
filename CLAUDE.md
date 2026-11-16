@@ -1,8 +1,8 @@
 # Robot Game
 
 3D mech combat game: Babylon.js + TypeScript, runs in the browser via Vite. Currently an 8 km
-streamed open world with four biomes, three playable frames (light, medium, heavy) and one enemy
-faction.
+streamed open world with four biomes, three playable frames (light, medium, heavy) and four
+factions at war over it. The player is independent: who is hostile depends on their standing.
 
 The roadmap is in `docs/roadmap.md`, with one document per phase in `docs/phases/`. Before starting
 work, read the roadmap and the document for the current phase, and settle that phase's "Decide
@@ -25,13 +25,15 @@ Run `npm run check` after any gameplay change, and look at the screenshots.
 Three layers with a strict dependency direction: `sim` knows nothing about Babylon.
 
 - `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, loot,
-  terrain shape, chunk planning, site placement, sleeping mech records).
+  terrain shape, chunk planning, site placement, sleeping mech records, the faction war,
+  reputation).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
 - `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
   camera, save).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
-- `src/data/`: everything tunable (frames, weapons, plating, factions, garrisons, loot, the world
-  with its regions and sites, biomes, site layouts, streaming distances).
+- `src/data/`: everything tunable (frames, weapons, plating, factions and their rosters, garrisons,
+  war pace and reputation, loot, the world with its regions and sites, biomes, site layouts,
+  streaming distances).
   Prefer changing data over changing code.
 
 Key seams:
@@ -48,8 +50,15 @@ Key seams:
   Terrain meshes, colliders, spawns and the map are all pure functions of it.
 - `TerrainStreamer` (`src/game/terrainStream.ts`): loads and unloads chunks around the player on a
   per-frame time budget. What to load is decided by the pure planner in `src/sim/chunks.ts`.
-- `MechRecord` (`src/sim/population.ts`): every enemy pilot in the world. `World.mechs` holds only
-  the ones awake near the player; `World.population` holds all of them.
+- `MechRecord` (`src/sim/population.ts`): every AI pilot in the world. `World.mechs` holds only
+  the ones awake near the player; `World.population` holds all of them, and changes as the war
+  moves garrisons about.
+- `WarState` (`src/sim/war.ts`): who holds each site and with how many pilots, plus raids on the
+  march. `stepWar` advances it every `WAR.tickSeconds` of play, deterministically, and it is
+  saved. Fights near the player are played out by real mechs and reported back
+  (`World.watchRaids`); everywhere else they are dice.
+- Hostility: `World.hostile(a, b)` is the one question to ask. Between AI factions it is fixed
+  (`areHostile`); with the player it follows `save.standing` (`src/sim/reputation.ts`).
 
 ## Things that are easy to get wrong
 
@@ -58,6 +67,19 @@ Key seams:
 - Terrain exists only near the player. Anything placed far away (a mech, a crate) has no ground
   under it until its chunk loads: check `terrain.hasGround` first. Moving the player with
   `player.teleport` is safe: the surroundings are loaded before physics next runs.
+- Not every mech is an enemy. `World.enemies` is only those hostile to the player; `World.others`
+  is every other mech. A garrison is written as jobs (`GARRISONS`) filled from the holder's
+  `roster`, so what stands at a site depends on who holds it.
+- The war runs during e2e tests and can change who holds a site. Tests that depend on ownership
+  set `world.warPaused = true` first.
+- A site's `troops` in the war and its living garrison records must agree. Change one through
+  the other: `setTroops`/`clearSite` after kills, `syncGarrison` after the war changes a site
+  the player cannot see. Never rebuild the garrison of a site the player is near.
+- `WAR.observeRange` must stay beyond `STREAM.mechSleep`, so no awake mech belongs to a site the
+  war is resolving by dice. A unit test checks it.
+- Saves from before phase 4 have no `war` or `standing`: the war starts fresh around their
+  `held` and `cleared` lists. `save.held` is now a mirror of the bases the war says are the
+  player's.
 - Enemies are asleep (not in `World.mechs`) until the player is within `STREAM.mechWake` metres.
   Tests that need enemies go near them first (`approachOutpost` in `tests/e2e/helpers.ts`).
 - Streaming distances in `src/data/streaming.ts` depend on each other: fog must end inside the
@@ -91,7 +113,9 @@ Backquote (`) toggles a stats overlay and live sliders for the player frame's ha
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating.
 
-M opens the world map. From the browser console, `__game.world.player.teleport({x, y, z}, 0)`
+M opens the world map, which shows who holds what and the player's standing. From the console,
+`__game.world.war` is the war's state and `__game.world.save.standing.wardens = 50` changes a
+standing. From the browser console, `__game.world.player.teleport({x, y, z}, 0)`
 goes anywhere (use `__game.world.heightAt(x, z)` for `y`).
 
 Profiling: open the game with `?profile` in the URL. It records per-frame timings and counters

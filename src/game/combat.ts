@@ -1,5 +1,4 @@
 import { Mesh, Scene, Vector3 } from "@babylonjs/core";
-import { areHostile } from "../data/factions";
 import type { SectionId } from "../data/frames";
 import { MELEE, WEAPON_RULES, type WeaponDef } from "../data/weapons";
 import { applyDamage, type DamageResult } from "../sim/damage";
@@ -26,6 +25,16 @@ export interface CombatEvents {
   onExplosion(at: Vector3, radius: number): void;
 }
 
+/** Who may hurt whom. Supplied by the world, because the player's relations change as they play. */
+export interface CombatRules {
+  /** The two attack each other on sight: weapons lock on, and blasts and melee swings hurt. */
+  hostile(a: MechEntity, b: MechEntity): boolean;
+  /** A shot from `shooter` stops on `target` rather than passing through. */
+  canHit(shooter: MechEntity, target: MechEntity): boolean;
+  /** Multiplier on damage `attacker` deals to `victim`. */
+  damageScale(attacker: MechEntity, victim: MechEntity): number;
+}
+
 interface Projectile {
   pos: Vector3;
   vel: Vector3;
@@ -47,11 +56,13 @@ export class Combat {
     private readonly mechs: () => readonly MechEntity[],
     private readonly rng: () => number,
     private readonly events: CombatEvents,
+    private readonly rules: CombatRules,
   ) {}
 
   /**
-   * Nearest thing along a ray: static world geometry or a living mech hostile to `shooter`.
-   * Friendly mechs are ignored, so there is no friendly fire.
+   * Nearest thing along a ray: static world geometry or a living mech `shooter` can hit.
+   * AI pilots' shots pass through anyone they are not at war with, so they have no friendly
+   * fire; the player's shots hit whoever is in the way (see `CombatRules.canHit`).
    */
   trace(origin: Vector3, dir: Vector3, range: number, shooter: MechEntity): TraceHit | null {
     let best: TraceHit | null = null;
@@ -59,7 +70,7 @@ export class Combat {
     if (world) best = { point: world.point, distance: world.distance, mech: null, section: null };
 
     for (const mech of this.mechs()) {
-      if (mech === shooter || !mech.alive || !areHostile(mech.faction, shooter.faction)) continue;
+      if (mech === shooter || !mech.alive || !this.rules.canHit(shooter, mech)) continue;
       const hit = raycastMech(origin, dir, best ? best.distance : range, mech.feet, mech.state.torsoYaw, mech.frame, mech.isDestroyed);
       if (hit && (!best || hit.distance < best.distance)) {
         best = { point: origin.add(dir.scale(hit.distance)), distance: hit.distance, mech, section: hit.section };
@@ -99,7 +110,7 @@ export class Combat {
     let candidate: MechEntity | null = null;
     let best = WEAPON_RULES.lockCone;
     for (const other of this.mechs()) {
-      if (other === mech || !other.alive || !areHostile(other.faction, mech.faction)) continue;
+      if (other === mech || !other.alive || !this.rules.hostile(mech, other)) continue;
       const to = other.center.subtract(eye);
       const dist = to.length();
       if (dist > seeker.def.range || dist < 1) continue;
@@ -204,7 +215,7 @@ export class Combat {
     mech.visual.kickRecoil("armL");
     mech.visual.kickRecoil("armR");
     for (const other of this.mechs()) {
-      if (other === mech || !other.alive || !areHostile(other.faction, mech.faction)) continue;
+      if (other === mech || !other.alive || !this.rules.hostile(mech, other)) continue;
       const dx = other.feet.x - mech.feet.x;
       const dz = other.feet.z - mech.feet.z;
       if (Math.hypot(dx, dz) > MELEE.range || Math.abs(other.feet.y - mech.feet.y) > mech.frame.height) continue;
@@ -218,7 +229,7 @@ export class Combat {
     if (!victim.alive) return;
     // A braced frame shrugs off part of every hit.
     const brace = victim.state.braced ? (victim.frame.brace?.damageTaken ?? 1) : 1;
-    const dealt = amount * attacker.damageScale * brace;
+    const dealt = amount * this.rules.damageScale(attacker, victim) * brace;
     const result = applyDamage(victim.health, section, dealt);
     for (const destroyed of result.destroyed) {
       if (destroyed === "armL" || destroyed === "armR") victim.visual.setArmVisible(destroyed, false);
@@ -238,7 +249,7 @@ export class Combat {
     if (direct?.mech && direct.section) this.damage(direct.mech, direct.section, p.def.damage, p.shooter);
     if (radius <= 0) return;
     for (const mech of this.mechs()) {
-      if (mech === p.shooter || mech === direct?.mech || !mech.alive || !areHostile(mech.faction, p.shooter.faction)) continue;
+      if (mech === p.shooter || mech === direct?.mech || !mech.alive || !this.rules.hostile(p.shooter, mech)) continue;
       const reach = radius + mech.frame.radius;
       const d = Vector3.Distance(mech.center, at);
       if (d >= reach) continue;

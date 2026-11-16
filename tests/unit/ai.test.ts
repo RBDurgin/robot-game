@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SIM_DT } from "../../src/sim/clock";
-import { AI_ROLES, createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiView } from "../../src/sim/ai/brain";
+import { AI_ROLES, blocksFire, createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiView } from "../../src/sim/ai/brain";
 import { pickAttackers } from "../../src/sim/ai/squad";
 import { makeRng } from "../../src/sim/math";
 
@@ -113,6 +113,58 @@ describe("thinkAi", () => {
     const ai = createAiState();
     const intent = run(ai, baseView({ speed: 0 }), 1);
     expect(intent.jump).toBe(true);
+  });
+
+  it("will not fire through a friend, and sidesteps for a clear shot", () => {
+    const ai = createAiState();
+    const clear = baseView({ target: target(80) });
+    run(ai, clear, 1);
+    let fired = false;
+    for (let t = 0; t < 4; t += SIM_DT) fired ||= thinkAi(ai, clear, DEFAULT_AI, SIM_DT, makeRng(2), 0).firePrimary;
+    expect(fired).toBe(true);
+    const blocked = { ...clear, fireBlocked: true };
+    const rng = makeRng(3);
+    for (let t = 0; t < 6; t += SIM_DT) {
+      const intent = thinkAi(ai, blocked, DEFAULT_AI, SIM_DT, rng, 0);
+      expect(intent.firePrimary || intent.fireSecondary || intent.fireTertiary).toBe(false);
+      expect(intent.moveX).not.toBe(0);
+    }
+    // A support pilot normally stands still; with a friend in the way even it shuffles aside.
+    const support = createAiState();
+    support.mode = "engage";
+    expect(thinkAi(support, { ...blocked, target: target(120) }, AI_ROLES.support, SIM_DT, makeRng(4), 0).moveX).not.toBe(0);
+  });
+
+  it("knows when a friend is in the line of fire", () => {
+    const eye = { x: 0, y: 3, z: 0 };
+    const foe = { x: 0, y: 3, z: 100 };
+    expect(blocksFire(eye, foe, { x: 1, y: 3, z: 50 }, 3)).toBe(true);
+    expect(blocksFire(eye, foe, { x: 8, y: 3, z: 50 }, 3)).toBe(false);
+    // Behind the shooter or beyond the target is not in the way.
+    expect(blocksFire(eye, foe, { x: 0, y: 3, z: -10 }, 3)).toBe(false);
+    expect(blocksFire(eye, foe, { x: 0, y: 3, z: 130 }, 3)).toBe(false);
+  });
+
+  it("a wingman keeps station on its leader, and breaks off to fight", () => {
+    const ai = createAiState();
+    const far = run(ai, baseView({ follow: { x: 120, y: 0, z: 0 } }), 0.5);
+    expect(far.moveZ).toBe(1);
+    expect(far.sprint).toBe(true);
+    expect(far.aimYaw).toBeCloseTo(Math.PI / 2, 5);
+    const near = run(createAiState(), baseView({ follow: { x: 8, y: 0, z: 0 } }), 0.5);
+    expect(near.moveZ).toBe(0);
+    const fighting = createAiState();
+    const intent = run(fighting, baseView({ follow: { x: 120, y: 0, z: 0 }, target: target(80) }), 2);
+    expect(fighting.mode).toBe("engage");
+    expect(intent.aimYaw).toBeCloseTo(0, 0);
+  });
+
+  it("forgets an alarm when there is nobody to fight", () => {
+    const ai = createAiState();
+    ai.alerted = true;
+    run(ai, baseView(), 0.1);
+    expect(ai.alerted).toBe(false);
+    expect(ai.mode).toBe("patrol");
   });
 
   it("returns to patrol when no target remains", () => {
