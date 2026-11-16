@@ -5,7 +5,9 @@ import { WEAPONS, type WeaponId } from "../data/weapons";
 import type { Settings } from "../game/save";
 import type { WorldModel } from "../sim/terrain";
 import { drawMap, type MapSite, type MapTerritory } from "./mapView";
-import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type Inventory, type ItemId } from "../sim/loadout";
+import { buyItem, buyPrice, repairBill, sellItem, sellPrice, spareCount, type Wallet } from "../sim/economy";
+import { fitsMount, fitToFrame, isWeaponId, itemName, loadoutProblems, loadoutStats, type ItemId } from "../sim/loadout";
+import { PRICES } from "../data/economy";
 
 type Child = Node | string;
 
@@ -52,8 +54,14 @@ export interface HangarOptions {
   /** The frame the suit is built on now. */
   frame: FrameId;
   loadout: Loadout;
-  inventory: Inventory;
-  scrap: number;
+  /** The build last deployed. Its parts cannot be sold, whatever is on the bench. */
+  fitted: Loadout;
+  /** The player's scrap and parts. The shop changes both in place. */
+  wallet: Wallet;
+  /** What a full repair of the suit costs, before the cap and what the player can pay. */
+  repairCost: number;
+  /** Called after each purchase or sale, to save it. */
+  onTrade(): void;
   onDeploy(frame: FrameId, loadout: Loadout): void;
 }
 
@@ -197,10 +205,6 @@ export class Screens {
     let frameId = opts.frame;
     let loadout: Loadout = fitToFrame(FRAMES[frameId], opts.loadout);
 
-    const owned = (Object.entries(opts.inventory) as [ItemId, number][]).filter(([, n]) => n > 0);
-    const weaponsOwned = owned.filter(([id]) => isWeaponId(id)).map(([id]) => id as WeaponId);
-    const platingOwned = owned.filter(([id]) => !isWeaponId(id)).map(([id]) => id as PlatingId);
-
     const select = <T extends string>(label: string, options: [T, string][], current: T | null, allowEmpty: boolean, set: (v: T | null) => void): HTMLElement => {
       const input = el("select");
       if (allowEmpty) {
@@ -218,14 +222,19 @@ export class Screens {
       input.addEventListener("change", () => set(input.value === "" ? null : (input.value as T)));
       return el("label", "row", [el("span", "", [label]), input]);
     };
-    const itemOption = <T extends ItemId>(id: T): [T, string] => [id, `${itemName(id)} (x${opts.inventory[id] ?? 0})`];
+    const itemOption = <T extends ItemId>(id: T): [T, string] => [id, `${itemName(id)} (x${opts.wallet.inventory[id] ?? 0})`];
 
     // The panel is rebuilt when the frame changes, because the frame decides which mounts exist.
     const render = (focusFrame: boolean): void => {
       const frame: FrameDef = FRAMES[frameId];
+      const owned = (Object.entries(opts.wallet.inventory) as [ItemId, number][]).filter(([, n]) => n > 0);
+      const weaponsOwned = owned.filter(([id]) => isWeaponId(id)).map(([id]) => id as WeaponId);
+      const platingOwned = owned.filter(([id]) => !isWeaponId(id)).map(([id]) => id as PlatingId);
+      const bill = repairBill(opts.repairCost, opts.wallet.scrap);
+      const sells: [ItemId, HTMLButtonElement][] = [];
       const stats = el("div", "stats");
       const problems = el("ul", "problems");
-      const deploy = button("Repair and deploy", () => opts.onDeploy(frameId, { weapons: { ...loadout.weapons }, plating: loadout.plating }));
+      const deploy = button(bill > 0 ? `Repair and deploy · ${bill} scrap` : "Repair and deploy", () => opts.onDeploy(frameId, { weapons: { ...loadout.weapons }, plating: loadout.plating }));
 
       const refresh = (): void => {
         const s = loadoutStats(frame, loadout);
@@ -236,9 +245,11 @@ export class Screens {
           ...frame.hardpoints.map((h) => el("div", "dim", [`${h.name}: ${weaponLine(loadout.weapons[h.id] ?? null)}`])),
           el("div", "dim", [`Plating: ${PLATING[loadout.plating].description}`]),
         );
-        const issues = loadoutProblems(frame, loadout, opts.inventory);
+        const issues = loadoutProblems(frame, loadout, opts.wallet.inventory);
         problems.replaceChildren(...issues.map((p) => el("li", "", [p])));
         deploy.disabled = issues.length > 0;
+        // A part fitted on the bench stops being spare.
+        for (const [id, sell] of sells) sell.disabled = spareCount(opts.wallet.inventory, id, [loadout, opts.fitted]) < 1;
       };
 
       const frameSelect = select(
@@ -268,6 +279,28 @@ export class Screens {
         ),
       );
 
+      // Buying and selling rebuild the panel, since the parts on offer in each slot change.
+      const trade = (done: boolean): void => {
+        if (!done) return;
+        opts.onTrade();
+        const scroll = this.root.firstElementChild?.scrollTop ?? 0;
+        render(false);
+        if (this.root.firstElementChild) this.root.firstElementChild.scrollTop = scroll;
+      };
+      const shop = el("table", "shop", [
+        el("tbody", "", (Object.keys(PRICES) as ItemId[]).map((id) => {
+          const have = opts.wallet.inventory[id] ?? 0;
+          const buy = button(`Buy · ${buyPrice(id)}`, () => trade(buyItem(opts.wallet, id)), "secondary");
+          buy.disabled = opts.wallet.scrap < buyPrice(id);
+          buy.setAttribute("aria-label", `Buy ${itemName(id)} for ${buyPrice(id)} scrap`);
+          const sell = button(`Sell · ${sellPrice(id)}`, () => trade(sellItem(opts.wallet, id, [loadout, opts.fitted])), "secondary");
+          sells.push([id, sell]);
+          sell.setAttribute("aria-label", `Sell ${itemName(id)} for ${sellPrice(id)} scrap`);
+          const about = isWeaponId(id) ? weaponLine(id).split(" · ").slice(1).join(" · ") : PLATING[id].description;
+          return el("tr", have > 0 ? "" : "none", [el("th", "", [itemName(id)]), el("td", "count", [`x${have}`]), el("td", "about", [about]), el("td", "", [buy]), el("td", "", [sell])]);
+        })),
+      ]);
+
       const panel = el("div", "panel wide", [
         el("h1", "", [`Hangar · ${frame.name} frame`]),
         frameSelect,
@@ -280,8 +313,8 @@ export class Screens {
         }),
         stats,
         problems,
-        el("h2", "", [`Salvage store · ${opts.scrap} scrap`]),
-        el("ul", "inventory", owned.map(([id, n]) => el("li", "", [`${itemName(id)} x${n}`]))),
+        el("h2", "", [`Parts store · ${opts.wallet.scrap} scrap`]),
+        shop,
         el("div", "actions", [deploy]),
       ]);
       refresh();

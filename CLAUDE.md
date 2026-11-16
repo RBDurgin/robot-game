@@ -25,14 +25,14 @@ Run `npm run check` after any gameplay change, and look at the screenshots.
 Three layers with a strict dependency direction: `sim` knows nothing about Babylon.
 
 - `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, loot,
-  terrain shape, chunk planning, site placement, sleeping mech records, the faction war,
+  the economy, terrain shape, chunk planning, site placement, sleeping mech records, the faction war,
   reputation).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
 - `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
   camera, save).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
 - `src/data/`: everything tunable (frames, weapons, plating, factions and their rosters, garrisons,
-  war pace and reputation, loot, the world with its regions and sites, biomes, site layouts,
+  war pace and reputation, loot, prices and repair costs, the world with its regions and sites, biomes, site layouts,
   streaming distances).
   Prefer changing data over changing code.
 
@@ -101,6 +101,10 @@ Key seams:
 - The player's `MechEntity` is replaced when the frame changes in the hangar, so do not hold on
   to `world.player` across a deploy.
 - Beam weapons give `damage` and `heat` per second, not per shot.
+- Repairs cost scrap (`src/sim/economy.ts`), on respawn and on deploying from a hangar. Tests that
+  compare scrap across either must allow for the bill.
+- The hangar's shop changes `save.scrap` and `save.inventory` in place while the bench loadout is
+  still unsaved, so selling checks both the bench build and `save.loadout`.
 - Saves written before phase 2 have `armL`/`armR` in the loadout and no frame, and saves from
   before phase 3 have no position or world progress. `parseSave` in `src/game/save.ts` reads all
   of these; keep it that way when the save format changes again.

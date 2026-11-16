@@ -12,6 +12,7 @@ import { WEAPONS, type WeaponId } from "../data/weapons";
 import { WORLD } from "../data/world";
 import { AI_ROLES } from "../sim/ai/brain";
 import { healthFraction, sectionFraction } from "../sim/damage";
+import { repairBill, repairCost } from "../sim/economy";
 import type { Intent } from "../sim/intent";
 import { addItem, itemName } from "../sim/loadout";
 import { lockProgress } from "../sim/weapons";
@@ -645,15 +646,28 @@ export class World {
     this.screens.showHangar({
       frame: this.save.frame,
       loadout: this.save.loadout,
-      inventory: this.save.inventory,
-      scrap: this.save.scrap,
+      fitted: this.save.loadout,
+      wallet: this.save,
+      repairCost: repairCost(this.player.health),
+      onTrade: () => {
+        this.sfx.ui();
+        writeSave(this.save);
+      },
       onDeploy: (frame, loadout) => this.deploy(frame, loadout),
     });
+  }
+
+  /** Take the price of putting the player's suit right out of their scrap. Returns what was paid. */
+  private chargeRepair(): number {
+    const bill = repairBill(repairCost(this.player.health), this.save.scrap);
+    this.save.scrap -= bill;
+    return bill;
   }
 
   /** Fit the frame and loadout chosen in the hangar, repair, and return to play. */
   deploy(frame: FrameId, loadout: Loadout): void {
     const changed = frame !== this.save.frame;
+    const bill = this.chargeRepair();
     this.save.frame = frame;
     this.save.loadout = loadout;
     writeSave(this.save);
@@ -663,7 +677,8 @@ export class World {
       this.player.applyLoadout(loadout);
       this.player.restore();
     }
-    this.notify(changed ? `${this.player.frame.name} frame ready.` : "Suit refitted and repaired.");
+    const paid = bill > 0 ? ` Repairs cost ${bill} scrap.` : "";
+    this.notify((changed ? `${this.player.frame.name} frame ready.` : bill > 0 ? "Suit refitted and repaired." : "Suit refitted.") + paid, 4);
     this.resume();
   }
 
@@ -1000,9 +1015,11 @@ export class World {
   private respawnPlayer(): void {
     this.releaseWingmen();
     const base = this.nearestHeldBase(this.player.feet.x, this.player.feet.z);
+    const bill = this.chargeRepair();
     this.player.restore();
     this.movePlayer(base.x, base.z, base.id === this.model.def.homeBase ? World.homeYaw(this.model) : 0);
-    this.notify(`Suit restored at ${base.name}.`);
+    writeSave(this.save);
+    this.notify(`Suit restored at ${base.name}.${bill > 0 ? ` Repairs cost ${bill} scrap.` : ""}`, 5);
   }
 
   private collectSalvage(): void {

@@ -91,9 +91,12 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   await waitTicks(page, 5);
   const fitted = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { mode: w.mode, armR: w.player.weapons.armR?.def.id ?? null, armL: w.player.weapons.armL?.def.id ?? null };
+    return { mode: w.mode, scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id ?? null, armL: w.player.weapons.armL?.def.id ?? null };
   });
-  expect(fitted).toEqual({ mode: "playing", armR: "arcLauncher", armL: null });
+  expect(fitted).toMatchObject({ mode: "playing", armR: "arcLauncher", armL: null });
+  // The fight left damage, and the repair was paid for out of the salvage.
+  expect(fitted.scrap).toBeLessThanOrEqual(looted.scrap);
+  expect(fitted.scrap).toBeGreaterThanOrEqual(looted.scrap - 90);
 
   // Progress survives a reload.
   await page.reload();
@@ -102,7 +105,7 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
     const w = window.__game!.world;
     return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id ?? null, armL: w.player.weapons.armL?.def.id ?? null };
   });
-  expect(reloaded).toEqual({ scrap: looted.scrap, armR: "arcLauncher", armL: null });
+  expect(reloaded).toEqual({ scrap: fitted.scrap, armR: "arcLauncher", armL: null });
 
   expect(errors).toEqual([]);
 });

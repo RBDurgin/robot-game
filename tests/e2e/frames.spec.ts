@@ -55,9 +55,9 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   await page.getByLabel("Right arm").selectOption("lanceBeam");
   await page.getByLabel("Left arm").selectOption("scatterGun");
   // Bulwark plating on top of all that is half a tonne too much, even for this frame.
-  await page.getByLabel("Plating").selectOption("heavyPlating");
+  await page.locator("select").and(page.getByLabel("Plating")).selectOption("heavyPlating");
   await expect(page.getByText(/Over capacity by 0.5 t/)).toBeVisible();
-  await page.getByLabel("Plating").selectOption("standardPlating");
+  await page.locator("select").and(page.getByLabel("Plating")).selectOption("standardPlating");
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeEnabled();
   await page.screenshot({ path: `${SHOTS}/12-hangar-heavy.png` });
   await page.getByRole("button", { name: "Repair and deploy" }).click();
@@ -137,7 +137,7 @@ test("frames: three silhouettes, switch frame in the hangar, abilities and shoul
   await expect(page.getByLabel("Right shoulder")).toHaveCount(0);
   // The heavy build is too much for a scout.
   await expect(page.getByText(/Over capacity/)).toBeVisible();
-  await page.getByLabel("Plating").selectOption("lightPlating");
+  await page.locator("select").and(page.getByLabel("Plating")).selectOption("lightPlating");
   await page.getByLabel("Left arm").selectOption("");
   await expect(page.getByRole("button", { name: "Repair and deploy" })).toBeEnabled();
   await page.screenshot({ path: `${SHOTS}/14-hangar-light.png` });

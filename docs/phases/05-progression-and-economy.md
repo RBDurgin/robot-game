@@ -1,6 +1,6 @@
 # Phase 5: Progression and economy
 
-**Status: not started.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
+**Status: in progress.** Size: 2 to 3 sessions. Depends on: phase 2. Better after phase 3 if loot should vary by region.
 
 ## Goal
 
@@ -16,6 +16,14 @@ Scrap is collected in the slice but buys nothing. Once there are several frames 
 2. Does dying cost anything (repair bill, dropped salvage), or stay free as it is now?
 3. Are there pilot upgrades, or does all progression live in the mech?
 
+## Decisions (settled 2026-11-16)
+
+1. Power is mostly horizontal: three modest tiers (about +8% each) and one or two modifiers per
+   drop. A starting weapon stays usable.
+2. Dying costs a repair bill: respawn at base and pay scrap in proportion to the damage, capped,
+   and free when the player has no scrap. No gear is lost.
+3. All progression lives in the mech (frames, hardpoints, parts, standing). No pilot upgrades.
+
 ## Build steps
 
 1. **Spending scrap.** Repair costs at base, buying and selling parts. A simple shop screen beside the hangar in `src/view/screens.ts`. Prices in data.
@@ -24,6 +32,19 @@ Scrap is collected in the slice but buys nothing. Once there are several frames 
 4. **Unlocks.** Frames and hardpoints earned through scrap, reputation or milestones.
 5. **Save system upgrade** in `src/game/save.ts`: explicit version number with migrations, several save slots, and a move from `localStorage` to IndexedDB once inventory holds item instances. Export and import a save as a file.
 6. **Difficulty by region.** Enemy tier follows where the player is, not the player's level, so the world has safe and dangerous areas.
+
+## What is built so far
+
+- Step 1. Repairs are billed on respawn and on deploying from a hangar: `ECONOMY.repairPerPoint`
+  scrap per point of armor or structure put back, at most `ECONOMY.repairCap`, and never more than
+  the player has. The hangar has a parts store: every part is for sale at the price in `PRICES`
+  and sells back at `ECONOMY.sellRatio`. A part on the bench build or the deployed build cannot be
+  sold. Rules are in `src/sim/economy.ts`, numbers in `src/data/economy.ts`.
+
+## For the playtest
+
+- Whether a lost suit (74 scrap on the medium frame, about three kills) stings the right amount.
+- Whether prices (120 to 300 for a weapon) make a purchase feel earned over the first hour.
 
 ## Out of scope
 
@@ -51,8 +72,8 @@ Story rewards (phase 6). Balance for a full-length game; aim for a curve that ho
 
 ## Checklist
 
-- [ ] Progression shape and death cost agreed
-- [ ] Repair costs and shop
+- [x] Progression shape and death cost agreed
+- [x] Repair costs and shop
 - [ ] Item instances with tiers and modifiers
 - [ ] Loot tables by faction and region
 - [ ] Frame and hardpoint unlocks
