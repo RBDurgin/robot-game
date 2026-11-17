@@ -17,4 +17,7 @@ export const FEEL = {
   heatWarnFraction: 0.8,
   /** Most wrecks kept in the world; the oldest is removed first. */
   maxWrecks: 12,
+  /** How long a line of radio dialogue stays up: a base time plus reading time per character, seconds. */
+  commsBase: 2.5,
+  commsPerChar: 0.05,
 };

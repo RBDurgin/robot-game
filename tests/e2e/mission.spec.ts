@@ -11,6 +11,16 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   await startGame(page);
   await waitTicks(page, 30);
 
+  // The first mission is under way from the start, and the world reports what happens in it.
+  const opening = await page.evaluate(() => {
+    const w = window.__game!.world;
+    const log: string[] = [];
+    (window as unknown as { missionLog: string[] }).missionLog = log;
+    w.onEvent = (e) => log.push(e.type === "mechDestroyed" ? `${e.type}:${e.faction}:${e.site}:${e.byPlayer}` : e.type === "siteCleared" ? `${e.type}:${e.site}:${e.byPlayer}` : e.type);
+    return { mission: w.mission?.def.id, stage: w.mission?.state.stage, done: w.save.missions.done };
+  });
+  expect(opening).toEqual({ mission: "first-outpost", stage: "assault", done: [] });
+
   // Pause and resume.
   await page.keyboard.press("KeyP");
   await expect(page.getByRole("heading", { name: "Paused" })).toBeVisible();
@@ -39,9 +49,17 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   const cleared = await page.evaluate(() => {
     const w = window.__game!.world;
     // Crates dropped by mechs; caches lying at sites nearby are counted separately.
-    return { phase: w.phase, kills: w.kills, crates: w.salvage.countAt(null), mechs: w.mechs.length };
+    return { stage: w.mission?.state.stage, kills: w.kills, crates: w.salvage.countAt(null), mechs: w.mechs.length };
   });
-  expect(cleared).toEqual({ phase: "return", kills: 5, crates: 5, mechs: 1 });
+  expect(cleared).toEqual({ stage: "return", kills: 5, crates: 5, mechs: 1 });
+  const events = await page.evaluate(() => (window as unknown as { missionLog: string[] }).missionLog);
+  expect(events.filter((e) => e === "mechDestroyed:combine:kestrel-outpost:true")).toHaveLength(5);
+  expect(events.at(-1)).toBe("siteCleared:kestrel-outpost:true");
+
+  // Radio dialogue shows on the HUD, a line at a time.
+  await page.evaluate(() => window.__game!.world.say([{ speaker: "Dispatch", text: "Outpost is quiet. Pick up what you can carry and come home." }]));
+  await waitTicks(page, 2);
+  await page.screenshot({ path: `${SHOTS}/08a-comms.png` });
 
   // Walk over every crate to collect it.
   for (let i = 0; i < 5; i++) {
@@ -69,6 +87,11 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   });
   await expect(page.getByRole("heading", { name: "Outpost cleared" })).toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: `${SHOTS}/09-mission-complete.png` });
+  const after = await page.evaluate(() => {
+    const w = window.__game!.world;
+    return { mission: w.mission, done: w.save.missions.done, collected: (window as unknown as { missionLog: string[] }).missionLog.filter((e) => e === "itemCollected").length };
+  });
+  expect(after).toEqual({ mission: null, done: ["first-outpost"], collected: 5 });
   await page.getByRole("button", { name: "Keep exploring" }).click();
   await waitTicks(page, 120);
 
@@ -103,9 +126,9 @@ test("mission loop: clear outpost, salvage, return, refit in hangar, progress is
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   const reloaded = await page.evaluate(() => {
     const w = window.__game!.world;
-    return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id ?? null, armL: w.player.weapons.armL?.def.id ?? null };
+    return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id ?? null, armL: w.player.weapons.armL?.def.id ?? null, mission: w.mission, done: w.save.missions.done };
   });
-  expect(reloaded).toEqual({ scrap: fitted.scrap, armR: "arcLauncher", armL: null });
+  expect(reloaded).toEqual({ scrap: fitted.scrap, armR: "arcLauncher", armL: null, mission: null, done: ["first-outpost"] });
 
   expect(errors).toEqual([]);
 });

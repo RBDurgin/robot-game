@@ -26,14 +26,14 @@ Three layers with a strict dependency direction: `sim` knows nothing about Babyl
 
 - `src/sim/`: pure TypeScript game rules (movement, damage, hit volumes, AI brain, loadout, items, loot,
   the economy, terrain shape, chunk planning, site placement, sleeping mech records, the faction war,
-  reputation).
+  reputation, the mission interpreter).
   Deterministic, fixed 60 Hz step, unit-tested. New rules go here first, with tests.
 - `src/game/`: Babylon integration (world, terrain streaming, physics, input, mech entity, combat,
   camera, save and save slots).
 - `src/view/`: visuals and UI (procedural mech parts, terrain, effects, HUD, HTML menus, audio).
 - `src/data/`: everything tunable (frames, weapons, plating, tiers and modifiers, factions and their rosters, garrisons,
   war pace and reputation, loot, prices and repair costs, the world with its regions and sites, biomes, site layouts,
-  streaming distances).
+  streaming distances, missions).
   Prefer changing data over changing code.
 
 Key seams:
@@ -60,6 +60,10 @@ Key seams:
   march. `stepWar` advances it every `WAR.tickSeconds` of play, deterministically, and it is
   saved. Fights near the player are played out by real mechs and reported back
   (`World.watchRaids`); everywhere else they are dice.
+- `MissionDef` (`src/data/missions.ts`): a scripted mission is a data row of stages with goals.
+  The interpreter in `src/sim/mission.ts` advances it from events the world emits
+  (`World.emit`) and facts it asks for (`MissionFacts`). `World.mission` is the one in
+  progress; its state lives in `save.missions`.
 - Hostility: `World.hostile(a, b)` is the one question to ask. Between AI factions it is fixed
   (`areHostile`); with the player it follows `save.standing` (`src/sim/reputation.ts`).
 
@@ -124,6 +128,16 @@ Key seams:
 - Saves written before phase 2 have `armL`/`armR` in the loadout and no frame, and saves from
   before phase 3 have no position or world progress. All of those count as version 1, and
   `parseSave` in `src/game/save.ts` reads them; keep it that way.
+- A new mission, stage or goal is data: add it to `MISSIONS` and run the unit tests, which
+  check every site, place and stage it names. The story outline is `docs/story-outline.md`.
+- Pilots a mission brings in (`spawn`) are `MechRecord`s with `mission` set and a `siteId` that
+  is no site (it names that playing of the mission). Code that looks a record's site up must
+  allow for that, as it does for raiders. They are not saved: a loaded mission restarts its
+  current stage.
+- A mission's summary screen stops the clock (`mode` is "complete"), as do the briefing and
+  every menu. E2E tests must not `waitTicks` after the step that ends a mission.
+- A site a mission is waiting to see cleared is frozen in the war (`awaitedSites`), so only
+  the player can clear it.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 
@@ -133,6 +147,10 @@ Backquote (`) toggles a stats overlay and live sliders for the player frame's ha
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
 and unlock every frame and mount.
+
+B at a base opens the briefing for the mission on offer. From the console,
+`__game.world.save.missions.done.push("first-outpost")` skips a mission when none is in
+progress: the next one is on offer at once.
 
 M opens the world map, which shows who holds what and the player's standing. From the console,
 `__game.world.war` is the war's state and `__game.world.save.standing.wardens = 50` changes a

@@ -1,6 +1,6 @@
 # Phase 6: Story missions
 
-**Status: not started.** Size: 3 to 4 sessions. Depends on: phase 4.
+**Status: in progress.** Size: 3 to 4 sessions. Depends on: phase 4.
 
 ## Goal
 
@@ -16,6 +16,52 @@ The world, factions and progression exist by this point. Story gives them direct
 2. Who the player is, and whether they speak.
 3. Length. Suggested: five to seven missions, two to three hours.
 4. Does the campaign pick a side in the war, or let the player choose?
+
+## Decisions (settled 2026-11-16)
+
+1. **Premise: "The Signal".** The Listening Dish wakes, something in the Fallen Carrier answers,
+   and every faction races for it. The one-page outline is `docs/story-outline.md`; approved
+   by the user on 2026-11-16.
+2. **The player speaks.** A defined pilot with short lines on the radio. No branching dialogue.
+3. **Six missions, about two hours:** one of each mission type.
+4. **The player chooses a side at the midpoint.** The first three missions are shared; the
+   patron chosen then decides who briefs and who helps in the last three, and the ending.
+
+## What is built so far
+
+- Step 1. A mission is a `MissionDef` in `src/data/missions.ts`: stages, each with goals (all
+  must be met), optional ways to fail (any one), things to do on entry (radio lines, a notice)
+  and a waypoint. `src/sim/mission.ts` is the interpreter: `startMission`, `missionEvent`,
+  `stepMission`, and `missionProblems`, which a unit test runs over every mission written.
+  A stage can wait on: a site cleared, the player in or out of a place, mechs destroyed (by
+  tag, faction, site or killer), items collected, a site captured, time elapsed, the player
+  destroyed.
+- Step 2. The world reports mech destroyed, site cleared, site captured, item collected and
+  player destroyed through `World.emit`; `World.onEvent` listens in. Places and timers are
+  asked about each step rather than sent as events (`MissionFacts`), so a goal still counts if
+  it was already true when the stage began.
+- Step 7. The outpost mission is the first row of `MISSIONS` (`first-outpost`); `World.phase`
+  and its special cases are gone. The mission in progress and the list of those done are in
+  the save (version 4). Its text is unchanged for now and is rewritten with the campaign.
+- Step 3, most of it. Radio lines queue and show one at a time on the HUD (`World.say`, timing
+  in `FEEL`); lines left over from a stage are dropped when the mission moves on. A mission that
+  does not start by itself is on offer at any base the player can use: the objective line and
+  compass say so, and B opens its briefing (who is asking, what for, what it pays) to accept or
+  leave. The summary at the end lists what was paid. A mission log and portraits are still to do.
+- Step 4, the first three types. A stage can bring in a squad (`spawn`): pilots from a faction's
+  roster, starting at a place or walking in to it from a bearing, optionally hostile or allied
+  whatever the player's standing, optionally already hunting. They are ordinary `MechRecord`s
+  with a `mission` tag, so `destroyed` goals can count them. They are not saved: a mission picked
+  up from a save starts its current stage again (`resumeMission`), so stages are checkpoints.
+  Failing ends the mission; it is on offer again at a base.
+- Step 5, three of six. "Clear Signal" (assault: the outpost mission, now with its radio lines),
+  "Listening Post" (recon: reach the Dish and visit three masts past a Combine survey team) and
+  "The Needle" (defend: three waves at the spire, failed by leaving it or being destroyed).
+
+Still to build: the patron choice after mission 3 and what it changes; a tagged pickup (the key
+in mission 4); a friendly suit that follows a route (mission 5); a named enemy with their own
+build (mission 6); markers in the world for mission places (the masts are only compass points
+so far); contracts; the mission log.
 
 ## Build steps
 
@@ -52,13 +98,13 @@ Voice acting, cutscenes, branching dialogue trees. Keep choices to which mission
 
 ## Checklist
 
-- [ ] Story outline approved
-- [ ] Mission data format and interpreter with tests
-- [ ] Event feed from the world
-- [ ] Comms, briefing and log UI
-- [ ] Mission type templates
-- [ ] Slice mission converted
-- [ ] Campaign missions built: __ of __
+- [x] Story outline approved
+- [x] Mission data format and interpreter with tests
+- [x] Event feed from the world
+- [ ] Comms, briefing and log UI (comms and briefing done; log to do)
+- [ ] Mission type templates (assault, recon, defend done; salvage run, escort, duel to do)
+- [x] Slice mission converted
+- [ ] Campaign missions built: 3 of 6
 - [ ] Generated contracts
-- [ ] Mission data validation test
+- [x] Mission data validation test
 - [ ] User playthrough and sign-off

@@ -40,6 +40,7 @@ const CONTROLS: [string, string][] = [
   ["V", "Switch third-person / cockpit view"],
   ["H", "Hangar (at a base you hold, or an ally's)"],
   ["G", "Call allied pilots to your wing, or release them"],
+  ["B", "Mission briefing (at a base, when one is on offer)"],
   ["M", "World map and fast travel"],
   ["Esc", "Pause"],
 ];
@@ -134,7 +135,25 @@ function frameTable(selected: FrameId): HTMLElement {
   return table;
 }
 
+export interface BriefingOptions {
+  title: string;
+  /** The kind of mission, for the line under the title. */
+  type: string;
+  /** Who is speaking. */
+  from: string;
+  text: string[];
+  /** What it pays, a line each. */
+  rewards: string[];
+  onAccept(): void;
+  onLater(): void;
+}
+
 export interface MissionSummary {
+  /** What the mission paid, a line each. */
+  rewards: string[];
+  /** Heading and a line or two on how it went. */
+  title: string;
+  text: string;
   seconds: number;
   kills: number;
   deaths: number;
@@ -469,7 +488,20 @@ export class Screens {
     this.show(el("div", "panel mapPanel", [el("h1", "", [opts.model.def.name]), el("div", "mapBody", [canvas, side])]));
   }
 
-  showComplete(summary: MissionSummary, onReplay: () => void, onContinue: () => void): void {
+  showBriefing(opts: BriefingOptions): void {
+    this.show(
+      el("div", "panel", [
+        el("h1", "", [opts.title]),
+        el("h2", "", [`${opts.type} mission · ${opts.from}`]),
+        ...opts.text.map((line) => el("p", "", [line])),
+        ...(opts.rewards.length > 0 ? [el("h2", "", ["Pays"]), el("p", "", [opts.rewards.join(", ")])] : []),
+        el("div", "actions", [button("Accept", opts.onAccept), button("Not now", opts.onLater, "secondary")]),
+      ]),
+    );
+  }
+
+  /** The summary at the end of a mission. `onReplay` is null for missions that cannot be played again. */
+  showComplete(summary: MissionSummary, onReplay: (() => void) | null, onContinue: () => void): void {
     const mins = Math.floor(summary.seconds / 60);
     const secs = Math.floor(summary.seconds % 60);
     const rows: [string, string][] = [
@@ -479,14 +511,15 @@ export class Screens {
       ["Parts salvaged", String(summary.items)],
       ["Scrap", String(summary.scrap)],
     ];
+    if (summary.rewards.length > 0) rows.unshift(["Paid", summary.rewards.join(", ")]);
     const list = el("dl", "controls");
     for (const [k, v] of rows) list.append(el("dt", "", [k]), el("dd", "", [v]));
     this.show(
       el("div", "panel", [
-        el("h1", "", ["Outpost cleared"]),
-        el("p", "", ["The Combine garrison is destroyed and you made it home."]),
+        el("h1", "", [summary.title]),
+        el("p", "", [summary.text]),
         list,
-        el("div", "actions", [button("Play again", onReplay), button("Keep exploring", onContinue, "secondary")]),
+        el("div", "actions", onReplay ? [button("Play again", onReplay), button("Keep exploring", onContinue, "secondary")] : [button("Continue", onContinue)]),
       ]),
     );
   }

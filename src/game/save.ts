@@ -1,7 +1,9 @@
 import { FRAMES, HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
+import { MISSIONS } from "../data/missions";
 import { addItem, findItem, fitFromLoadout, isPlatingItem, isWeaponItem, parseSpec, plainSpec, type Fit, type Inventory, type Item } from "../sim/items";
 import { isPlatingId, isWeaponId } from "../sim/loadout";
+import { parseMissionState, type MissionState } from "../sim/mission";
 import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
 import { frameUnlocked, isUnlockId, mountUnlocked, unlocksUsed } from "../sim/unlocks";
 import type { UnlockId } from "../data/unlocks";
@@ -22,8 +24,9 @@ export interface Settings {
  *
  * 2: parts are individual items with a tier and modifiers; the loadout became a `fit` of them.
  * 3: frames and shoulder mounts have to be unlocked.
+ * 4: scripted missions: which are done and how far the one in progress has got.
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export interface SaveData {
   version: number;
@@ -55,6 +58,13 @@ export interface SaveData {
    * starts, by `parseWar`.
    */
   war: WarState | null;
+  /** Scripted missions: the ids of those finished, and the one in progress. */
+  missions: MissionProgress;
+}
+
+export interface MissionProgress {
+  done: string[];
+  active: MissionState | null;
 }
 
 export interface SavedPosition {
@@ -82,6 +92,7 @@ export function freshSave(): SaveData {
     looted: [],
     standing: startingStanding(),
     war: null,
+    missions: { done: [], active: null },
   };
 }
 
@@ -135,8 +146,17 @@ function toUnlocks(data: Record<string, unknown>): void {
   data.unlocks = isFrameId(data.frame) ? unlocksUsed(data.frame, slots) : [];
 }
 
+/**
+ * Version 3 to 4: there was one mission, built into the game: clear the first outpost and come
+ * home. It counted as over once the outpost had been cleared, and still does.
+ */
+function toMissions(data: Record<string, unknown>): void {
+  const cleared = Array.isArray(data.cleared) && data.cleared.includes("kestrel-outpost");
+  data.missions = { done: cleared ? ["first-outpost"] : [], active: null };
+}
+
 /** `MIGRATIONS[n]` turns version n data into version n + 1, in place. */
-const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks };
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks, 3: toMissions };
 
 /** A copy of stored data brought up to the current version. */
 export function migrateSave(raw: Record<string, unknown>): Record<string, unknown> {
@@ -205,5 +225,10 @@ export function parseSave(raw: unknown): SaveData {
   // what the player had taken and cleared.
   save.standing = parseStanding(data.standing);
   save.war = data.war && typeof data.war === "object" ? (data.war as WarState) : null;
+  // A mission that has been rewritten since the save restarts from its first stage.
+  const m = (data.missions && typeof data.missions === "object" ? data.missions : {}) as { done?: unknown; active?: unknown };
+  const done = parseIds(m.done).filter((id) => MISSIONS.some((def) => def.id === id));
+  const active = parseMissionState(m.active, MISSIONS);
+  save.missions = { done, active: active && !done.includes(active.id) ? active : null };
   return save;
 }
