@@ -791,23 +791,27 @@ export class World {
     return this.contractBuilt.def;
   }
 
-  /** The contracts on the board at a base: none while a mission is in progress. */
+  /** The contracts on the board at a base. Only one mission can be in hand, so none can be taken while one is. */
   get contracts(): ContractSpec[] {
-    if (this.save.missions.active) return [];
     const regions = new Map(this.model.def.regions.map((r) => [r.id, r.danger]));
     return contractsOnOffer(this.war, this.warMap, this.save.standing, (id) => regions.get(id) ?? 1);
   }
 
   /** Read the contract board. Only at a base. */
   openContracts(): void {
+    if (!this.atBase) {
+      this.notify("Contracts are posted at bases you hold, or an ally's.", 3);
+      return;
+    }
     const contracts = this.contracts;
-    if (this.save.missions.active || !this.atBase) return;
+    const busy = this.mission;
     this.mode = "briefing";
     this.input.enabled = false;
     this.input.releasePointer();
     this.sfx.setThrust(0);
     this.sfx.ui();
     this.screens.showContracts({
+      busy: busy ? `You already have ${busy.def.title} in hand. Finish it, or fail it, before taking a contract.` : null,
       contracts: contracts.map((spec) => {
         const def = contractDef(spec);
         return {
@@ -826,6 +830,7 @@ export class World {
     });
   }
 
+  /** Take a contract from the board. Not while another mission is in hand. */
   takeContract(spec: ContractSpec): void {
     if (this.save.missions.active) return;
     this.save.missions.contract = spec;
@@ -1630,7 +1635,7 @@ export class World {
     if (this.atBase && this.player.alive) lines.push("Press H: hangar (refit, repair)");
     if (this.atBase && this.player.alive && this.offers) lines.push("Press B: hear the offers");
     else if (this.atBase && this.player.alive && this.offered) lines.push("Press B: mission briefing");
-    if (this.atBase && this.player.alive && !this.save.missions.active) lines.push("Press C: contracts");
+    if (this.atBase && this.player.alive) lines.push("Press C: contracts");
     return lines.join("\n");
   }
 

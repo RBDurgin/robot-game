@@ -164,6 +164,8 @@ export interface OfferOptions {
 }
 
 export interface ContractOptions {
+  /** Why no contract can be taken now (a mission is in hand), or null. */
+  busy: string | null;
   contracts: {
     title: string;
     from: string;
@@ -574,6 +576,8 @@ export class Screens {
         el("p", "motto", [`Pays ${c.rewards.join(", ")}`]),
         el("div", "actions", [button("Accept", c.onAccept)]),
       ]);
+      const accept = card.querySelector("button")!;
+      accept.disabled = opts.busy !== null;
       card.style.borderTopColor = c.color;
       return card;
     });
@@ -581,6 +585,7 @@ export class Screens {
       el("div", "panel offersPanel", [
         el("h1", "", ["Contracts"]),
         el("p", "", [cards.length > 0 ? "Work on offer from the factions that will deal with you. The board changes as the war does." : "Nobody who will deal with you has work at the moment. Look again later."]),
+        ...(opts.busy ? [el("p", "bad", [opts.busy])] : []),
         el("div", "offers", cards),
         el("div", "actions", [button("Close", opts.onClose, "secondary")]),
       ]),

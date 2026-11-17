@@ -396,8 +396,19 @@ test("contracts: work from the war's state, taken from the board at a base; and 
   // Take the first. It is a mission like any other, and the campaign's own stays on offer behind it.
   await page.getByRole("button", { name: "Accept" }).first().click();
   await waitTicks(page, 3);
-  const taken = await page.evaluate(() => ({ id: window.__game!.world.mission?.def.id, spec: window.__game!.world.save.missions.contract, board: window.__game!.world.contracts.length }));
-  expect(taken).toMatchObject({ id: `contract:${board[0]!.kind}:${board[0]!.site}`, spec: board[0], board: 0 });
+  const taken = await page.evaluate(() => ({ id: window.__game!.world.mission?.def.id, spec: window.__game!.world.save.missions.contract }));
+  expect(taken).toMatchObject({ id: `contract:${board[0]!.kind}:${board[0]!.site}`, spec: board[0] });
+  // With a mission in hand the board still opens, but says why nothing can be taken.
+  await page.keyboard.press("KeyC");
+  await expect(page.getByText("Finish it, or fail it, before taking a contract.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Accept" }).first()).toBeDisabled();
+  await page.getByRole("button", { name: "Close" }).click();
+  // Away from a base it does not open at all, and says so.
+  await page.evaluate(() => window.__game!.world.player.teleport({ x: 0, y: window.__game!.world.heightAt(0, -900) + 2, z: -900 }, 0));
+  await waitTicks(page, 4);
+  await page.keyboard.press("KeyC");
+  await expect(page.getByRole("heading", { name: "Contracts", exact: true })).toBeHidden();
+  expect(await page.evaluate(() => window.__game!.world.mode)).toBe("playing");
 
   // The log says what is in hand and what has been done.
   await page.keyboard.press("KeyL");
