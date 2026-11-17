@@ -8,6 +8,8 @@ import { ENEMY_LOADOUTS } from "../data/loadouts";
 import { PLATING } from "../data/parts";
 import { UNLOCK_IDS } from "../data/unlocks";
 import type { Danger, RegionDef } from "../data/world";
+import { CAMPAIGN_LENGTH, campaignOf } from "../data/missions";
+import { PATRON_OFFER, PATRONS } from "../data/patrons";
 import { cacheSpots } from "../data/siteLayouts";
 import { STREAM } from "../data/streaming";
 import { REPUTATION, WAR } from "../data/war";
@@ -23,8 +25,11 @@ import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
 import { cacheTableFor, lootTableFor, rollCache, rollLoot } from "../sim/loot";
 import { lerp, makeRng, type Vec3 } from "../sim/math";
-import { buildPopulation, garrisonLeft, populationChanges, raidersLeft, raidRecords, syncGarrison, type IdSource, type MechRecord } from "../sim/population";
-import { attitudeOf, hostileFactions, recordCapture, recordFriendlyFire, recordKill, type Attitude } from "../sim/reputation";
+import { awaitedSites, BASE_PLACE, currentStage, missionEvent, nextMission, objectiveText, resumeMission, startMission, stepMission, type Line, type MissionDef, type MissionEffect, type MissionFacts, type MissionState, type PlaceDef, type WorldEvent } from "../sim/mission";
+import { contractDef, contractsOnOffer, isContractId, type ContractSpec } from "../sim/contracts";
+import { patronsOffering, takePatron, type PatronDef } from "../sim/patron";
+import { buildPopulation, garrisonLeft, missionRecords, populationChanges, raidersLeft, raidRecords, syncGarrison, type IdSource, type MechRecord } from "../sim/population";
+import { attitudeOf, awardStanding, hostileFactions, recordCapture, recordFriendlyFire, recordKill, type Attitude } from "../sim/reputation";
 import { buildWarMap, captureByRaid, clearSite, endRaid, parseWar, regionControl, setTroops, settleRaid, siteCounts, stepWar, type Holder, type WarContext, type WarEvent, type WarMap, type WarState } from "../sim/war";
 import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "../sim/terrain";
 import { buildWorldModel } from "../sim/worldgen";
@@ -32,6 +37,7 @@ import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
 import { Hud, type RadarBlip } from "../view/hud/hud";
 import { Screens } from "../view/screens";
+import { PlaceMarker } from "../view/placeMarker";
 import { WreckField } from "../view/wreck";
 import { AiController } from "./aiController";
 import { CameraRig } from "./camera/cameraRig";
@@ -64,10 +70,8 @@ const RAID_MARCH = 6;
 const RAID_ARRIVED = 30;
 const SECTION_NAMES: Record<SectionId, string> = { torso: "torso", armL: "left arm", armR: "right arm", legs: "legs" };
 
-/** paused: menu open. hangar: refitting at base. map: world map open. complete: mission summary showing. */
-export type GameMode = "playing" | "paused" | "hangar" | "map" | "complete";
-/** assault: enemies remain. return: outpost cleared, head home. done: summary has been shown. */
-export type MissionPhase = "assault" | "return" | "done";
+/** paused: menu open. hangar: refitting at base. map: world map open. briefing: reading a mission on offer. complete: mission summary showing. */
+export type GameMode = "playing" | "paused" | "hangar" | "map" | "briefing" | "complete";
 
 /** Owns the scene and everything in it, and advances the game one fixed step at a time. */
 export class World {
@@ -101,7 +105,8 @@ export class World {
   /** Called after the player's mech is rebuilt on a different frame. */
   onPlayerFrameChanged: (() => void) | null = null;
   mode: GameMode = "paused";
-  phase: MissionPhase = "assault";
+  /** Called with everything that happens in the world that a mission could be waiting for. */
+  onEvent: ((event: WorldEvent) => void) | null = null;
   tick = 0;
   /** Test hook: stops the war's clock, so tests can rely on who holds what. */
   warPaused = false;
@@ -124,6 +129,18 @@ export class World {
   private wasHot = false;
   private wasOverheated = false;
   private message: { text: string; time: number } | null = null;
+  /** Radio lines waiting their turn; the first is the one on screen. */
+  private readonly comms: { line: Line; time: number }[] = [];
+  /** After a failure, the mission is not begun again until the player is back at a base. */
+  private missionHeld = false;
+  /** Names this playing of the mission in progress; the pilots it brings in carry it as their site. */
+  private missionRun = "";
+  private missionRuns = 0;
+  /** Pickups a mission has asked for that are waiting for the ground under them to load. */
+  private pendingDrops: { tag: string; name: string; x: number; z: number }[] = [];
+  /** What the tagged pickups lying about are called. */
+  private readonly dropNames = new Map<string, string>();
+  private readonly placeMarker: PlaceMarker;
   private readonly fog = { r: 0, g: 0, b: 0, start: 0, end: 0, set: false };
   private readonly biomeMix = new Float32Array(BIOME_IDS.length);
 
@@ -144,6 +161,7 @@ export class World {
     this.rng = makeRng(model.def.seed);
     this.effects = new Effects(scene);
     this.salvage = new SalvageField(scene);
+    this.placeMarker = new PlaceMarker(scene);
     this.wrecks = new WreckField(scene, FEEL.maxWrecks);
     this.mechs.push(player);
     this.warMap = buildWarMap(model);
@@ -158,12 +176,16 @@ export class World {
     save.held = this.heldBases.filter((b) => !b.held).map((b) => b.id);
     this.warContext = {
       observed: (id) => this.observed(id),
-      frozen: (id) => id === model.def.missionOutpost && this.phase === "assault",
+      frozen: (id) => this.awaited(id),
       hostileToPlayer: (faction) => attitudeOf(this.save.standing, faction) === "hostile",
     };
     this.population = buildPopulation(model, this.war, this.recordIds);
     this.region = regionAt(model.def, player.feet.x, player.feet.z);
-    if (save.cleared.includes(model.def.missionOutpost)) this.phase = "done";
+    // A contract on a site this world does not have cannot be finished.
+    if (this.save.missions.contract && !this.warMap.byId.has(this.save.missions.contract.site)) this.save.missions.contract = this.save.missions.active = null;
+    const saved = this.mission;
+    if (saved) this.runMission(saved.def, resumeMission(saved.def, saved.state));
+    else this.offerMission();
     terrain.onSite = (site, loaded) => this.onSiteStreamed(site, loaded);
 
     const rules = {
@@ -214,6 +236,17 @@ export class World {
     });
     input.onPress("KeyH", () => {
       if (this.mode === "playing" && this.atBase && this.player.alive) this.openHangar();
+    });
+    input.onPress("KeyB", () => {
+      if (this.mode !== "playing" || !this.player.alive) return;
+      if (this.offers) this.openOffers();
+      else this.openBriefing();
+    });
+    input.onPress("KeyC", () => {
+      if (this.mode === "playing" && this.player.alive) this.openContracts();
+    });
+    input.onPress("KeyL", () => {
+      if (this.mode === "playing") this.openLog();
     });
     input.onPress("KeyG", () => {
       if (this.mode === "playing" && this.player.alive) this.toggleWingmen();
@@ -379,6 +412,9 @@ export class World {
   /** How one mech regards the player: its faction's attitude, unless the player has provoked its squad. */
   attitudeOfMech(mech: MechEntity): Attitude {
     if (!isWarFactionId(mech.faction)) return "allied";
+    // A squad a mission brought in can have its mind made up already.
+    const stance = this.records.get(mech)?.mission?.stance;
+    if (stance) return stance;
     if (mech.brain && (this.grievance.get(mech.brain.squadId) ?? 0) >= REPUTATION.provokeDamage) return "hostile";
     return this.attitude(mech.faction);
   }
@@ -440,7 +476,7 @@ export class World {
     }
     const p = this.player.feet;
     const near = this.mechs
-      .filter((m) => m.brain && m.alive && this.attitudeOfMech(m) === "allied" && Vector3.Distance(m.feet, p) < WINGMAN_RANGE)
+      .filter((m) => m.brain && m.alive && !m.brain.passive && this.attitudeOfMech(m) === "allied" && Vector3.Distance(m.feet, p) < WINGMAN_RANGE)
       .sort((a, b) => Vector3.DistanceSquared(a.feet, p) - Vector3.DistanceSquared(b.feet, p))
       .slice(0, MAX_WINGMEN);
     if (near.length === 0) {
@@ -509,6 +545,7 @@ export class World {
       this.notify(`${FACTIONS[event.raid.faction].name} raid closing on ${target.name}.`, 5);
     } else {
       this.syncSite(event.site);
+      if (event.type === "captured") this.emit({ type: "siteCaptured", site: event.site, by: event.by });
       this.reportBattle(event);
     }
   }
@@ -734,20 +771,328 @@ export class World {
     this.onPlayerFrameChanged?.();
   }
 
-  private completeMission(): void {
-    this.phase = "done";
+  // --- Missions ---
+
+  /** The scripted mission in progress, and how far it has got. */
+  get mission(): { def: MissionDef; state: MissionState } | null {
+    const state = this.save.missions.active;
+    if (!state) return null;
+    if (isContractId(state.id)) return this.contractMission && this.contractMission.id === state.id ? { def: this.contractMission, state } : null;
+    const def = this.missions.find((m) => m.id === state.id);
+    return def ? { def, state } : null;
+  }
+
+  /** The mission the contract in progress stands for, built once. */
+  private contractBuilt: { spec: ContractSpec; def: MissionDef } | null = null;
+  private get contractMission(): MissionDef | null {
+    const spec = this.save.missions.contract;
+    if (!spec) return null;
+    if (this.contractBuilt?.spec !== spec) this.contractBuilt = { spec, def: contractDef(spec) };
+    return this.contractBuilt.def;
+  }
+
+  /** The contracts on the board at a base. Only one mission can be in hand, so none can be taken while one is. */
+  get contracts(): ContractSpec[] {
+    const regions = new Map(this.model.def.regions.map((r) => [r.id, r.danger]));
+    return contractsOnOffer(this.war, this.warMap, this.save.standing, (id) => regions.get(id) ?? 1);
+  }
+
+  /** Read the contract board. Only at a base. */
+  openContracts(): void {
+    if (!this.atBase) {
+      this.notify("Contracts are posted at bases you hold, or an ally's.", 3);
+      return;
+    }
+    const contracts = this.contracts;
+    const busy = this.mission;
+    this.mode = "briefing";
+    this.input.enabled = false;
+    this.input.releasePointer();
+    this.sfx.setThrust(0);
+    this.sfx.ui();
+    this.screens.showContracts({
+      busy: busy ? `You already have ${busy.def.title} in hand. Finish it, or fail it, before taking a contract.` : null,
+      contracts: contracts.map((spec) => {
+        const def = contractDef(spec);
+        return {
+          title: def.title,
+          from: def.briefing!.from,
+          text: def.briefing!.text,
+          rewards: this.rewardLines(def),
+          color: cssColor(FACTIONS[spec.giver].colors.primary),
+          onAccept: () => {
+            this.takeContract(spec);
+            this.resume();
+          },
+        };
+      }),
+      onClose: () => this.resume(),
+    });
+  }
+
+  /** Take a contract from the board. Not while another mission is in hand. */
+  takeContract(spec: ContractSpec): void {
+    if (this.save.missions.active) return;
+    this.save.missions.contract = spec;
+    this.beginMission(contractDef(spec));
+  }
+
+  /** The campaign as it stands for this player: their patron's missions follow the shared ones. */
+  get missions(): MissionDef[] {
+    return campaignOf(this.save.missions.patron);
+  }
+
+  private readonly missionFacts: MissionFacts = {
+    inArea: (place, radius) => this.inPlace(place, radius),
+    defendersAt: (site) => this.defendersLeft(site),
+    squadIn: (tag, place) => {
+      const def = this.mission?.def;
+      const squad = this.population.filter((r) => r.alive && r.siteId === this.missionRun && r.mission?.tag === tag);
+      if (!def || squad.length === 0) return false;
+      const at = this.placeOf(def, place);
+      return squad.every((r) => Math.hypot(r.x - at.x, r.z - at.z) < at.radius);
+    },
+  };
+
+  /** Where a mission's place is: one of its own, a site, or the nearest base the player holds. */
+  private placeOf(def: MissionDef, place: string): PlaceDef {
+    if (place === BASE_PLACE) return this.nearestOf(this.heldBases, this.player.feet.x, this.player.feet.z);
+    return def.places?.[place] ?? this.model.siteById.get(place) ?? this.homeBase;
+  }
+
+  private inPlace(place: string, radius?: number): boolean {
+    if (place === BASE_PLACE) return this.atBase;
+    const def = this.mission?.def;
+    if (!def) return false;
+    const at = this.placeOf(def, place);
+    return Math.hypot(this.player.feet.x - at.x, this.player.feet.z - at.z) < (radius ?? at.radius);
+  }
+
+  /** True if the mission in progress is waiting for this site to be cleared. */
+  private awaited(siteId: string): boolean {
+    const m = this.mission;
+    return m !== null && awaitedSites(m.def, m.state).includes(siteId);
+  }
+
+  /** Report something that has happened to the mission in progress and to anyone listening. */
+  private emit(event: WorldEvent): void {
+    const m = this.mission;
+    if (m) missionEvent(m.def, m.state, event);
+    this.onEvent?.(event);
+  }
+
+  /** Begin the next mission on offer, if it is one that starts by itself. */
+  private offerMission(): void {
+    if (this.save.missions.active || (this.missionHeld && !this.atBase)) return;
+    this.missionHeld = false;
+    const def = nextMission(this.missions, this.save.missions.done);
+    if (def?.auto) this.beginMission(def);
+  }
+
+  /** The mission waiting to be taken at a base, if there is one. */
+  get offered(): MissionDef | null {
+    if (this.save.missions.active) return null;
+    const def = nextMission(this.missions, this.save.missions.done);
+    return def && !def.auto ? def : null;
+  }
+
+  /** The patrons with an offer waiting for the player at base, once the campaign has reached that point. */
+  get offers(): PatronDef[] | null {
+    const { active, patron, done } = this.save.missions;
+    if (active || patron || !done.includes(PATRON_OFFER.after)) return null;
+    return patronsOffering(PATRONS, this.save.standing);
+  }
+
+  /** Hear the patrons' offers. Only at a base. */
+  openOffers(): void {
+    const offers = this.offers;
+    if (!offers || !this.atBase) return;
+    this.mode = "briefing";
+    this.input.enabled = false;
+    this.input.releasePointer();
+    this.sfx.setThrust(0);
+    this.sfx.ui();
+    this.screens.showOffers({
+      offers: offers.map((p) => ({ name: p.name, role: p.role, motto: p.motto, text: p.offer, color: cssColor(FACTIONS[p.faction].colors.primary), onTake: () => this.choosePatron(p.faction) })),
+      onLater: () => this.resume(),
+    });
+  }
+
+  /** Take a patron: the rest of the campaign is theirs. There is no going back on it. */
+  choosePatron(faction: WarFactionId): void {
+    const offers = this.offers;
+    const patron = offers?.find((p) => p.faction === faction);
+    if (!offers || !patron) return;
+    this.changeStanding(() => takePatron(this.save.standing, offers, faction, PATRON_OFFER));
+    this.save.missions.patron = faction;
+    this.store.write(this.save);
+    this.resume();
+    this.notify(`You fly for the ${FACTIONS[faction].name} now.`, 6);
+    this.say([{ speaker: "Hale", text: `${patron.speaker}. All right. I'll keep the radio room open either way, Magpie.` }]);
+  }
+
+  beginMission(def: MissionDef): void {
+    const { state, effects } = startMission(def);
+    this.save.missions.active = state;
+    this.runMission(def, effects);
+  }
+
+  /** Start a new playing of a mission (taken, or picked up from a save) and do what its stage asks. */
+  private runMission(def: MissionDef, effects: MissionEffect[]): void {
+    this.missionRun = `mission:${def.id}:${++this.missionRuns}`;
+    this.applyMission(def, effects);
+  }
+
+  /** A mission is over: the pilots it brought in who are out of sight go; the rest walk on until they are. */
+  private endRun(): void {
+    this.missionRun = "";
+    this.pendingDrops.length = 0;
+    this.dropNames.clear();
+    this.salvage.removeTagged();
+    for (let i = this.population.length - 1; i >= 0; i--) {
+      const r = this.population[i]!;
+      if (r.mission && !r.active) this.population.splice(i, 1);
+    }
+  }
+
+  /** What a mission pays, in words. */
+  private rewardLines(def: MissionDef): string[] {
+    const lines = def.reward.scrap > 0 ? [`${def.reward.scrap} scrap`] : [];
+    for (const [faction, by] of Object.entries(def.reward.standing ?? {})) {
+      if (isWarFactionId(faction) && by !== 0) lines.push(`${by > 0 ? "+" : ""}${by} standing with the ${FACTIONS[faction].short}`);
+    }
+    for (const item of def.reward.items ?? []) lines.push(specName(item));
+    return lines;
+  }
+
+  /** Read the mission on offer. Only at a base. */
+  openBriefing(): void {
+    const def = this.offered;
+    if (!def?.briefing || !this.atBase) return;
+    this.mode = "briefing";
+    this.input.enabled = false;
+    this.input.releasePointer();
+    this.sfx.setThrust(0);
+    this.sfx.ui();
+    this.screens.showBriefing({
+      title: def.title,
+      type: def.type,
+      from: def.briefing.from,
+      text: def.briefing.text,
+      rewards: this.rewardLines(def),
+      onAccept: () => {
+        this.beginMission(def);
+        this.resume();
+      },
+      onLater: () => this.resume(),
+    });
+  }
+
+  private stepMissions(dt: number): void {
+    const m = this.mission;
+    if (m) this.applyMission(m.def, stepMission(m.def, m.state, dt, this.missionFacts));
+    else if (this.tick % 30 === 0) this.offerMission();
+    // What a mission leaves to be found appears once there is ground to put it on.
+    for (let i = this.pendingDrops.length - 1; i >= 0; i--) {
+      const drop = this.pendingDrops[i]!;
+      if (!this.terrain.hasGround(drop.x, drop.z)) continue;
+      this.dropNames.set(drop.tag, drop.name);
+      this.salvage.spawn(new Vector3(drop.x, this.heightAt(drop.x, drop.z) + 2.6, drop.z), { items: [], scrap: 0 }, null, drop.tag);
+      this.pendingDrops.splice(i, 1);
+    }
+  }
+
+  private applyMission(def: MissionDef, effects: MissionEffect[]): void {
+    // The mission has moved on: what was still waiting to be said about the last stage is stale.
+    if (effects.some((e) => e.do === "stage" || e.do === "complete" || e.do === "fail")) {
+      this.comms.length = Math.min(this.comms.length, 1);
+      if (this.comms[0]) this.comms[0].time = Math.min(this.comms[0].time, 1);
+    }
+    for (const effect of effects) {
+      if (effect.do === "say") this.say(effect.lines);
+      else if (effect.do === "notify") this.notify(effect.text, effect.seconds);
+      // Not before play begins: a slot nobody has played in stays empty.
+      else if (effect.do === "stage") this.started && this.store.write(this.save);
+      else if (effect.do === "spawn") {
+        // A squad that lasts across stages is brought in once.
+        if (effect.keep && this.population.some((r) => r.alive && r.siteId === this.missionRun && r.mission?.tag === effect.tag)) continue;
+        const route = (effect.route ?? []).map((place) => this.placeOf(def, place));
+        this.population.push(...missionRecords(this.model, effect, this.placeOf(def, effect.at), this.missionRun, this.recordIds, route));
+      }
+      else if (effect.do === "drop") this.pendingDrops.push({ tag: effect.tag, name: effect.name, ...this.placeOf(def, effect.at) });
+      else if (effect.do === "complete") this.completeMission(def);
+      else this.failMission(def);
+    }
+  }
+
+  /** The mission log: what is in progress, who the player flies for, and what has been done. */
+  openLog(): void {
+    const m = this.mission;
+    const patron = PATRONS.find((p) => p.faction === this.save.missions.patron);
+    this.mode = "briefing";
+    this.input.enabled = false;
+    this.input.releasePointer();
+    this.sfx.setThrust(0);
+    this.sfx.ui();
+    this.screens.showLog({
+      current: m ? { title: m.def.title, objective: objectiveText(m.def, m.state, this.missionFacts, 0) } : null,
+      next: m ? null : this.offers ? "Offers are waiting for you at any base you hold." : this.offered ? `${this.offered.title}: briefing at any base you hold.` : null,
+      patron: patron ? `${patron.name}, ${patron.role}` : null,
+      done: this.missions.filter((def) => this.save.missions.done.includes(def.id)).map((def) => ({ title: def.title, type: def.type, text: def.debrief.text })),
+      total: Math.max(this.missions.length, CAMPAIGN_LENGTH),
+      onClose: () => this.resume(),
+    });
+  }
+
+  /** Put lines of dialogue on the radio, one after another. */
+  say(lines: Line[]): void {
+    for (const line of lines) this.comms.push({ line, time: FEEL.commsBase + line.text.length * FEEL.commsPerChar });
+  }
+
+  private failMission(def: MissionDef): void {
+    const contract = isContractId(def.id);
+    this.save.missions.active = null;
+    this.save.missions.contract = null;
+    this.endRun();
+    this.missionHeld = true;
+    this.store.write(this.save);
+    this.notify(contract ? `Contract void: ${def.title.replace("Contract: ", "")}.` : `Mission failed: ${def.title}. ${def.auto ? "Return to a base to try again." : "Take it again at a base."}`, 6);
+  }
+
+  private completeMission(def: MissionDef): void {
+    const { scrap, standing } = def.reward;
+    this.save.missions.active = null;
+    this.save.missions.contract = null;
+    this.endRun();
+    // Contracts come round again; the campaign's missions are done once.
+    if (!isContractId(def.id)) this.save.missions.done.push(def.id);
+    const rewards = this.rewardLines(def);
+    this.save.scrap += scrap;
+    for (const item of def.reward.items ?? []) addItem(this.save.inventory, item);
+    if (standing) {
+      this.changeStanding(() => {
+        for (const [faction, by] of Object.entries(standing)) if (isWarFactionId(faction)) awardStanding(this.save.standing, faction, by);
+      });
+    }
+    this.store.write(this.save);
     this.mode = "complete";
     this.input.enabled = false;
     this.input.releasePointer();
     this.sfx.setThrust(0);
     this.screens.showComplete(
-      { seconds: this.tick / 60, kills: this.kills, deaths: this.deaths, scrap: this.save.scrap, items: this.itemsSalvaged },
-      () => {
-        // Play the opening mission again: its garrison returns and the player starts at home.
-        const post = this.model.def.missionOutpost;
-        this.save.cleared = this.save.cleared.filter((id) => id !== post);
-        this.war.sites[post] = { owner: this.warMap.byId.get(post)!.startOwner, troops: this.warMap.byId.get(post)!.capacity };
-        this.war.raids = this.war.raids.filter((r) => r.to !== post && r.from !== post);
+      { ...def.debrief, rewards, seconds: this.tick / 60, kills: this.kills, deaths: this.deaths, scrap: this.save.scrap, items: this.itemsSalvaged },
+      !def.replayable ? null : () => {
+        // Play the mission again: the garrisons it had the player clear return, and the player starts at home.
+        this.save.missions.done = this.save.missions.done.filter((id) => id !== def.id);
+        for (const stage of def.stages) {
+          for (const goal of stage.goals) {
+            const info = goal.when === "siteCleared" ? this.warMap.byId.get(goal.site) : undefined;
+            if (!info) continue;
+            this.save.cleared = this.save.cleared.filter((id) => id !== info.id);
+            this.war.sites[info.id] = { owner: info.startOwner, troops: info.capacity };
+            this.war.raids = this.war.raids.filter((r) => r.to !== info.id && r.from !== info.id);
+          }
+        }
         this.save.position = null;
         this.store.write(this.save);
         this.reload();
@@ -865,7 +1210,10 @@ export class World {
   }
 
   private holdBase(site: Site): void {
-    if (this.ownerOf(site.id) !== "player") clearSite(this.war, this.warMap, site.id, true);
+    if (this.ownerOf(site.id) !== "player") {
+      clearSite(this.war, this.warMap, site.id, true);
+      this.emit({ type: "siteCaptured", site: site.id, by: "player" });
+    }
     if (site.held || this.save.held.includes(site.id)) return;
     this.save.held.push(site.id);
     this.store.write(this.save);
@@ -890,6 +1238,8 @@ export class World {
       this.removeMech(mech);
       // Stragglers of a raid that is over have nowhere to belong: they are gone once out of sight.
       if (record.raidId !== undefined && !this.war.raids.some((r) => r.id === record.raidId)) this.population.splice(this.population.indexOf(record), 1);
+      // The same goes for pilots left over from a mission that has ended.
+      else if (record.mission && record.siteId !== this.missionRun) this.population.splice(this.population.indexOf(record), 1);
     }
     for (const record of wake) {
       // Never before the ground under it has a collider.
@@ -898,17 +1248,20 @@ export class World {
       // A pilot is as tough as the region its site is in, wherever it has wandered to.
       const danger = DANGER[this.dangerOf(record)];
       const mech = new MechEntity(this.scene, {
-        name: `${FACTIONS[record.faction].name} ${record.member.loadout}`,
+        name: record.mission?.name ?? `${FACTIONS[record.faction].name} ${record.member.loadout}`,
         frame: FRAMES[record.member.frame],
         faction: record.faction,
         position: World.groundPoint(this.model, record.x, record.z, 0.6),
         yaw: record.yaw,
         loadout: ENEMY_LOADOUTS[record.member.loadout],
-        armorScale: ENEMY_TUNING.armorScale * danger.armorScale,
-        damageScale: ENEMY_TUNING.damageScale * danger.damageScale,
+        armorScale: ENEMY_TUNING.armorScale * danger.armorScale * (record.mission?.tough ?? 1),
+        damageScale: ENEMY_TUNING.damageScale * danger.damageScale * (record.mission?.deadly ?? 1),
       });
       if (record.health) mech.adoptHealth(record.health);
       mech.brain = new AiController(record.patrol, record.home, record.patrolIndex, record.squadId, AI_ROLES[record.member.role]);
+      if (record.mission?.alert) mech.brain.alert();
+      mech.brain.passive = record.mission?.passive ?? false;
+      mech.brain.oneWay = record.mission?.route ?? false;
       record.active = true;
       this.records.set(mech, record);
       this.mechs.push(mech);
@@ -995,6 +1348,7 @@ export class World {
       this.deaths++;
       this.respawnTimer = RESPAWN_DELAY;
       this.notify("Suit destroyed. Recovering to base...", RESPAWN_DELAY);
+      this.emit({ type: "playerDestroyed" });
       return;
     }
     const byPlayer = attacker === this.player;
@@ -1010,11 +1364,14 @@ export class World {
       if (isWarFactionId(faction)) this.changeStanding(() => recordKill(this.save.standing, faction));
     }
     const record = this.records.get(victim);
+    const tag = record?.mission && record.siteId === this.missionRun ? record.mission.tag : null;
+    this.emit({ type: "mechDestroyed", faction, site: record && record.raidId === undefined && !record.mission ? record.siteId : null, tag, byPlayer });
     if (!record) return;
     record.alive = false;
     record.active = false;
-    // Raiders belong to no garrison; `watchRaids` notices when the last of them is gone.
-    if (record.raidId !== undefined) return;
+    // Raiders belong to no garrison; `watchRaids` notices when the last of them is gone. Nor do
+    // pilots a mission brought in.
+    if (record.raidId !== undefined || record.mission) return;
     const site = this.model.siteById.get(record.siteId)!;
     const owner = this.ownerOf(site.id);
     // A stray whose site has changed hands since it left: nothing more to settle.
@@ -1025,16 +1382,19 @@ export class World {
       if (byPlayer) this.notify(`${FACTIONS[owner].short} suit destroyed. ${left} remaining at ${site.name}.`, 4);
       return;
     }
+    // Asked before the mission hears of it: by then it may have moved on.
+    const awaited = this.awaited(site.id);
     const now = clearSite(this.war, this.warMap, site.id, byPlayer);
+    this.emit({ type: "siteCleared", site: site.id, byPlayer });
+    if (now === "player") this.emit({ type: "siteCaptured", site: site.id, by: "player" });
     if (!byPlayer) {
       this.store.write(this.save);
       return;
     }
     this.changeStanding(() => recordCapture(this.save.standing, owner));
     if (!this.save.cleared.includes(site.id)) this.save.cleared.push(site.id);
-    if (site.id === this.model.def.missionOutpost && this.phase === "assault") {
-      this.phase = "return";
-      this.notify("Outpost cleared! Collect salvage and return to base.", 6);
+    if (awaited) {
+      // The mission in progress says what happens next.
     } else if (now === "player") {
       this.holdBase(site);
     } else if (now === owner) {
@@ -1070,9 +1430,11 @@ export class World {
     if (drops.length === 0) return;
     const names: string[] = [];
     let scrap = 0;
-    for (const { drop, site } of drops) {
+    for (const { drop, site, tag } of drops) {
       // A site's cache is spent once its last crate is taken.
       if (site && this.salvage.countAt(site) === 0 && !this.save.looted.includes(site)) this.save.looted.push(site);
+      this.emit({ type: "itemCollected", tag, count: 1 });
+      if (tag) names.push(this.dropNames.get(tag) ?? tag);
       scrap += drop.scrap;
       for (const item of drop.items) {
         addItem(this.save.inventory, item);
@@ -1083,7 +1445,7 @@ export class World {
     this.save.scrap += scrap;
     this.store.write(this.save);
     this.sfx.pickup();
-    this.notify(`Salvaged: ${[...names, `${scrap} scrap`].join(", ")}`, 5);
+    this.notify(`Salvaged: ${[...names, ...(scrap > 0 || names.length === 0 ? [`${scrap} scrap`] : [])].join(", ")}`, 5);
   }
 
   /** Footfalls and landings: sound for every mech in earshot, dust, and a camera kick for the player. */
@@ -1153,12 +1515,12 @@ export class World {
       this.combat.stepMech(this.player, intent);
       this.heatFeedback();
       this.collectSalvage();
-      if (this.phase === "return" && this.atBase) this.completeMission();
     } else {
       this.aimedMech = null;
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) this.respawnPlayer();
     }
+    this.stepMissions(dt);
 
     perfEnd("step.player", t);
     t = perfStart();
@@ -1174,6 +1536,9 @@ export class World {
     for (const mech of this.mechs) {
       if (!mech.brain || !mech.alive) continue;
       const before = mech.brain.state.mode;
+      // A suit under escort waits for the player to catch up.
+      const waitFor = this.records.get(mech)?.mission?.waitFor;
+      mech.brain.hold = waitFor !== undefined && (!this.player.alive || Vector3.Distance(mech.feet, this.player.feet) > waitFor);
       const weaponsFree = mech.brain.target !== this.player || this.attackers.has(mech);
       const intent = mech.brain.think(mech, this.mechs, this.scene, this.tick, dt, this.rng, weaponsFree, this.hostileRule);
       if (before === "patrol" && mech.brain.state.mode !== "patrol") this.raiseAlarm(mech);
@@ -1197,6 +1562,7 @@ export class World {
     }
 
     if (this.message && (this.message.time -= dt) <= 0) this.message = null;
+    if (this.comms[0] && (this.comms[0].time -= dt) <= 0) this.comms.shift();
   }
 
   private readonly hostileRule = (a: MechEntity, b: MechEntity): boolean => this.hostile(a, b);
@@ -1225,7 +1591,7 @@ export class World {
     for (const site of this.model.sites) {
       const owner = this.ownerOf(site.id);
       if (!isWarFactionId(owner) || this.attitude(owner) !== "hostile" || this.defendersLeft(site.id) === 0) continue;
-      const known = this.save.discovered.includes(site.id) || (site.id === this.model.def.missionOutpost && this.phase === "assault");
+      const known = this.save.discovered.includes(site.id) || this.awaited(site.id);
       if (known && Math.hypot(site.x - p.x, site.z - p.z) < 1500) blips.push(rel(site.x, site.z, "outpost"));
     }
     for (const pos of this.salvage.positions) blips.push(rel(pos.x, pos.z, "salvage"));
@@ -1267,6 +1633,9 @@ export class World {
     if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · G: release`);
     else if (this.alliesNear) lines.push("Press G: call wingmen");
     if (this.atBase && this.player.alive) lines.push("Press H: hangar (refit, repair)");
+    if (this.atBase && this.player.alive && this.offers) lines.push("Press B: hear the offers");
+    else if (this.atBase && this.player.alive && this.offered) lines.push("Press B: mission briefing");
+    if (this.atBase && this.player.alive) lines.push("Press C: contracts");
     return lines.join("\n");
   }
 
@@ -1279,7 +1648,7 @@ export class World {
   /** True if an allied pilot is close enough to call as a wingman. */
   private get alliesNear(): boolean {
     const p = this.player.feet;
-    return this.mechs.some((m) => m.brain && m.alive && Vector3.Distance(m.feet, p) < WINGMAN_RANGE && this.attitudeOfMech(m) === "allied");
+    return this.mechs.some((m) => m.brain && m.alive && !m.brain.passive && Vector3.Distance(m.feet, p) < WINGMAN_RANGE && this.attitudeOfMech(m) === "allied");
   }
 
   /** Per-frame visual update. `alpha` is the fraction of a step since the last simulation step. */
@@ -1304,16 +1673,23 @@ export class World {
     perfEnd("visuals", t);
     t = perfStart();
     const s = this.player.state;
-    const left = this.defendersLeft(this.model.def.missionOutpost);
-    const goal = this.phase === "assault" ? this.missionOutpost : this.nearestOf(this.heldBases, this.player.feet.x, this.player.feet.z);
-    const dx = goal.x - this.player.feet.x;
-    const dz = goal.z - this.player.feet.z;
-    const objective =
-      this.phase === "assault"
-        ? `Clear the Combine outpost: ${left} hostile${left === 1 ? "" : "s"} remaining`
-        : this.phase === "return"
-          ? `Outpost cleared. Return to base${this.salvage.count > 0 ? ` (${this.salvage.count} salvage left)` : ""}`
-          : `Explore the Marches: ${this.save.discovered.length} of ${this.model.sites.length} places found`;
+    const m = this.mission;
+    const offered = m ? null : this.offered;
+    // With a mission waiting, the compass points at the nearest base to take it from.
+    const offers = m ? null : this.offers;
+    const waypoint = m ? currentStage(m.def, m.state).waypoint : offers ? { place: BASE_PLACE, label: "OFFERS" } : offered ? { place: BASE_PLACE, label: "MISSION" } : undefined;
+    const goal = !waypoint ? null : waypoint.place === BASE_PLACE ? this.nearestOf(this.heldBases, this.player.feet.x, this.player.feet.z) : this.placeOf(m?.def ?? offered!, waypoint.place);
+    // A place that is only a spot on the ground, not a site, gets a beacon to walk to.
+    const spot = m && waypoint ? m.def.places?.[waypoint.place] : undefined;
+    if (spot) this.placeMarker.show(spot.x, this.heightAt(spot.x, spot.z), spot.z, spot.radius);
+    else this.placeMarker.hide();
+    const objective = m
+      ? objectiveText(m.def, m.state, this.missionFacts, this.salvage.count)
+      : offers
+        ? `${offers.length === 1 ? "An offer is" : `${offers.length} offers are`} waiting for you. Hear ${offers.length === 1 ? "it" : "them"} at any base you hold`
+        : offered
+        ? `New mission: ${offered.title}. Briefing at any base you hold`
+        : `Explore the Marches: ${this.save.discovered.length} of ${this.model.sites.length} places found`;
     this.hud.update({
       energy: s.energy / this.player.frame.energyMax,
       heat: s.heat / this.player.frame.heatCapacity,
@@ -1326,10 +1702,11 @@ export class World {
       message:
         this.message?.text ?? (this.lockedOn ? "MISSILE LOCK: break line of sight or dash" : this.input.needsPointer ? "Click the view to capture the mouse" : null),
       heading: this.input.yaw,
+      comms: this.comms[0]?.line ?? null,
       waypoint:
-        this.phase === "done"
-          ? null
-          : { bearing: Math.atan2(dx, dz), distance: Math.hypot(dx, dz), label: this.phase === "assault" ? "OUTPOST" : "BASE" },
+        goal && waypoint
+          ? { bearing: Math.atan2(goal.x - this.player.feet.x, goal.z - this.player.feet.z), distance: Math.hypot(goal.x - this.player.feet.x, goal.z - this.player.feet.z), label: waypoint.label }
+          : null,
       heatWarnAt: FEEL.heatWarnFraction,
       hitFlash: this.hitFlash,
       killFlash: this.killFlash,

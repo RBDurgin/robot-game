@@ -3,6 +3,7 @@ import { FACTIONS, isWarFactionId, type FactionId, type SquadMember, type WarFac
 import type { StreamConfig } from "../data/streaming";
 import type { Health } from "./damage";
 import type { Vec3 } from "./math";
+import type { SpawnDef } from "./mission";
 import { heightAt, type Site, type WorldModel } from "./terrain";
 import type { Raid, WarState } from "./war";
 
@@ -21,6 +22,8 @@ export interface MechRecord {
   member: SquadMember;
   /** Set for raiders: the id of their raid in the war. Garrison pilots have none. */
   raidId?: number;
+  /** Set for pilots a mission brought in. They belong to no site: `siteId` names the mission's run. */
+  mission?: { tag: string; stance?: "hostile" | "allied"; alert: boolean; route: boolean; passive: boolean; waitFor?: number; tough: number; name?: string; deadly?: number };
   /** Patrol loop on the ground. */
   patrol: Vec3[];
   /** Where the squad falls back to. */
@@ -123,6 +126,31 @@ export function raidRecords(model: WorldModel, raid: Raid, target: Site, from: {
     records[records.length - 1]!.raidId = raid.id;
   }
   return records;
+}
+
+/**
+ * Records for a squad a mission brings in. `run` names this playing of the mission and stands
+ * in for the site, so no garrison or raid ever counts these pilots as its own.
+ */
+export function missionRecords(model: WorldModel, spawn: SpawnDef, at: { x: number; z: number }, run: string, ids: IdSource, route: { x: number; z: number }[] = []): MechRecord[] {
+  const angle = ((spawn.bearing ?? 0) * Math.PI) / 180;
+  const ux = Math.sin(angle);
+  const uz = Math.cos(angle);
+  const distance = spawn.distance ?? 0;
+  const home = ground(model, at.x + ux * distance, at.z + uz * distance);
+  // In to the place and round it, like a raid.
+  const loop = [ground(model, at.x + ux * 26, at.z + uz * 26), ground(model, at.x - uz * 26, at.z + ux * 26), ground(model, at.x - ux * 26, at.z - uz * 26), ground(model, at.x + uz * 26, at.z - ux * 26)];
+  // Or, with a route, along it once.
+  const patrol = route.length > 0 ? route.map((p) => ground(model, p.x, p.z)) : loop;
+  const roster = FACTIONS[spawn.faction].roster;
+  return spawn.members.map((slot, i) => {
+    // Abreast when walking in; spread round the loop when they start on it.
+    const side = (i - (spawn.members.length - 1) / 2) * 14;
+    const start = distance > 0 || route.length > 0 ? { x: home.x - uz * side, z: home.z + ux * side } : patrol[i % patrol.length]!;
+    const record = newRecord(ids, { siteId: run, squadId: `${run}:${spawn.tag}`, faction: spawn.faction, member: spawn.ace?.member ?? roster[slot], patrol, home, patrolIndex: distance > 0 || route.length > 0 ? 0 : (i + 1) % patrol.length, x: start.x, z: start.z });
+    record.mission = { tag: spawn.tag, stance: spawn.stance, alert: spawn.alert ?? false, route: route.length > 0, passive: spawn.passive ?? false, waitFor: spawn.waitFor, tough: spawn.tough ?? 1, name: spawn.ace?.name, deadly: spawn.ace?.deadly };
+    return record;
+  });
 }
 
 export interface PopulationChanges {

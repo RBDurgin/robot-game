@@ -51,6 +51,9 @@ function wrong(standing: Standing, victim: WarFactionId, loss: number, gain: num
   for (const other of WAR_FACTION_IDS) if (other !== victim && areHostile(other, victim)) shift(standing, other, gain);
 }
 
+/** Standing earned or lost outright, as pay for a mission. */
+export const awardStanding = (standing: Standing, faction: WarFactionId, by: number): void => shift(standing, faction, by);
+
 /** The player destroyed one of a faction's suits. */
 export const recordKill = (standing: Standing, victim: WarFactionId): void => wrong(standing, victim, REPUTATION.kill, REPUTATION.killEnemyOf);
 

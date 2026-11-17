@@ -46,7 +46,7 @@ test("saves: an old save moves into slot 1; slots, export, import and reset work
   expect(download.suggestedFilename()).toBe("robot-game-slot-1.json");
   await page.waitForFunction(() => "exported" in window);
   const file = await page.evaluate(() => (window as unknown as { exported: string }).exported);
-  expect(JSON.parse(file)).toMatchObject({ version: 3, scrap: 400 });
+  expect(JSON.parse(file)).toMatchObject({ version: 5, scrap: 400 });
 
   // A new game in slot 2 starts from nothing.
   await page.getByRole("button", { name: "New game in slot 2" }).click();

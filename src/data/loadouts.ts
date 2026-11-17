@@ -20,6 +20,8 @@ export const ENEMY_LOADOUTS = {
   raider: { weapons: { armL: "swarmPod", armR: "pulseRifle" }, plating: "lightPlating" },
   brawler: { weapons: { armL: "arcLauncher", armR: "scatterGun" }, plating: "standardPlating" },
   bulwark: { weapons: { armL: "arcLauncher", armR: "slugCannon" }, plating: "heavyPlating" },
+  /** Commander Varga's own build: a beam to pin and a cannon to finish. */
+  kestrelOne: { weapons: { armL: "lanceBeam", armR: "slugCannon" }, plating: "heavyPlating" },
   bombard: { weapons: { armR: "slugCannon", shoulderR: "seekerRack", shoulderL: "seekerRack" }, plating: "heavyPlating" },
 } satisfies Record<string, Loadout>;
 

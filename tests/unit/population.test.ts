@@ -6,7 +6,7 @@ import { STREAM } from "../../src/data/streaming";
 import { WORLD } from "../../src/data/world";
 import { rollCache } from "../../src/sim/loot";
 import { makeRng } from "../../src/sim/math";
-import { buildPopulation, garrisonLeft, populationChanges, raidersLeft, raidRecords, syncGarrison } from "../../src/sim/population";
+import { buildPopulation, garrisonLeft, missionRecords, populationChanges, raidersLeft, raidRecords, syncGarrison } from "../../src/sim/population";
 import { buildWarMap, clearSite, initialWar } from "../../src/sim/war";
 import { heightAt } from "../../src/sim/terrain";
 import { buildWorldModel } from "../../src/sim/worldgen";
@@ -154,5 +154,32 @@ describe("cache loot", () => {
     }
     expect(items).toBeGreaterThan(80);
     expect(items).toBeLessThan(160);
+  });
+});
+
+describe("mission squads", () => {
+  it("start out from the place on the bearing given, walk in, and belong to no site", () => {
+    const model = buildWorldModel(WORLD);
+    const at = model.siteById.get("the-needle")!;
+    const ids = { next: 500 };
+    const wave = missionRecords(model, { tag: "wave", faction: "syndicate", members: ["line", "scout", "rifle"], at: at.id, distance: 300, bearing: 90, stance: "hostile", alert: true }, at, "mission:test:1", ids);
+    expect(wave.map((r) => r.id)).toEqual([500, 501, 502]);
+    for (const r of wave) {
+      expect(r).toMatchObject({ faction: "syndicate", siteId: "mission:test:1", squadId: "mission:test:1:wave", mission: { tag: "wave", stance: "hostile", alert: true }, alive: true, active: false });
+      // East of the place, 300 m out, abreast.
+      expect(r.x - at.x).toBeCloseTo(300, 0);
+      expect(Math.abs(r.z - at.z)).toBeLessThanOrEqual(14);
+      expect(Math.hypot(r.patrol[0]!.x - at.x, r.patrol[0]!.z - at.z)).toBeLessThan(30);
+    }
+    expect(garrisonLeft(wave, at.id)).toBe(0);
+    // With no distance, the squad is already on its loop round the place.
+    const team = missionRecords(model, { tag: "team", faction: "combine", members: ["line", "marksman"], at: at.id }, at, "mission:test:1", ids);
+    for (const r of team) expect(Math.hypot(r.x - at.x, r.z - at.z)).toBeLessThan(30);
+    expect(team[0]!.mission).toEqual({ tag: "team", stance: undefined, alert: false, route: false, passive: false, waitFor: undefined, tough: 1, name: undefined, deadly: undefined });
+    // With a route, the squad starts at the place and its patrol is the route, from the beginning.
+    const far = { x: at.x + 900, z: at.z };
+    const [walker] = missionRecords(model, { tag: "walker", faction: "wardens", members: ["scout"], at: at.id, route: ["x"], passive: true, waitFor: 100, tough: 2 }, at, "mission:test:1", ids, [far]);
+    expect(walker).toMatchObject({ x: at.x, z: at.z, patrolIndex: 0, mission: { route: true, passive: true, waitFor: 100, tough: 2 } });
+    expect(walker!.patrol).toEqual([{ x: far.x, y: heightAt(model, far.x, far.z), z: far.z }]);
   });
 });

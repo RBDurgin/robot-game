@@ -40,6 +40,9 @@ const CONTROLS: [string, string][] = [
   ["V", "Switch third-person / cockpit view"],
   ["H", "Hangar (at a base you hold, or an ally's)"],
   ["G", "Call allied pilots to your wing, or release them"],
+  ["B", "Mission briefing (at a base, when one is on offer)"],
+  ["C", "Contracts (at a base)"],
+  ["L", "Mission log"],
   ["M", "World map and fast travel"],
   ["Esc", "Pause"],
 ];
@@ -134,7 +137,66 @@ function frameTable(selected: FrameId): HTMLElement {
   return table;
 }
 
+export interface BriefingOptions {
+  title: string;
+  /** The kind of mission, for the line under the title. */
+  type: string;
+  /** Who is speaking. */
+  from: string;
+  text: string[];
+  /** What it pays, a line each. */
+  rewards: string[];
+  onAccept(): void;
+  onLater(): void;
+}
+
+export interface OfferOptions {
+  offers: {
+    name: string;
+    role: string;
+    motto: string;
+    text: string[];
+    /** The faction's colour, as CSS. */
+    color: string;
+    onTake(): void;
+  }[];
+  onLater(): void;
+}
+
+export interface ContractOptions {
+  /** Why no contract can be taken now (a mission is in hand), or null. */
+  busy: string | null;
+  contracts: {
+    title: string;
+    from: string;
+    text: string[];
+    rewards: string[];
+    /** The paying faction's colour, as CSS. */
+    color: string;
+    onAccept(): void;
+  }[];
+  onClose(): void;
+}
+
+export interface LogOptions {
+  /** The mission in progress. */
+  current: { title: string; objective: string } | null;
+  /** What is waiting to be taken, in words. */
+  next: string | null;
+  patron: string | null;
+  /** The campaign missions finished, in order. */
+  done: { title: string; type: string; text: string }[];
+  /** How many missions the campaign has. */
+  total: number;
+  onClose(): void;
+}
+
 export interface MissionSummary {
+  /** What the mission paid, a line each. */
+  rewards: string[];
+  /** Heading and a line or two on how it went. */
+  title: string;
+  text: string;
   seconds: number;
   kills: number;
   deaths: number;
@@ -469,7 +531,83 @@ export class Screens {
     this.show(el("div", "panel mapPanel", [el("h1", "", [opts.model.def.name]), el("div", "mapBody", [canvas, side])]));
   }
 
-  showComplete(summary: MissionSummary, onReplay: () => void, onContinue: () => void): void {
+  showBriefing(opts: BriefingOptions): void {
+    this.show(
+      el("div", "panel", [
+        el("h1", "", [opts.title]),
+        el("h2", "", [`${opts.type} mission · ${opts.from}`]),
+        ...opts.text.map((line) => el("p", "", [line])),
+        ...(opts.rewards.length > 0 ? [el("h2", "", ["Pays"]), el("p", "", [opts.rewards.join(", ")])] : []),
+        el("div", "actions", [button("Accept", opts.onAccept), button("Not now", opts.onLater, "secondary")]),
+      ]),
+    );
+  }
+
+  /** The patrons' offers at the midpoint of the campaign: read them all, take one. */
+  showOffers(opts: OfferOptions): void {
+    const cards = opts.offers.map((o) => {
+      const card = el("div", "offer", [
+        el("h2", "", [o.name]),
+        el("p", "dim", [o.role]),
+        ...o.text.map((line) => el("p", "", [line])),
+        el("p", "motto", [`"${o.motto}"`]),
+        el("div", "actions", [button(`Fly for ${o.name.split(" ").pop()}`, o.onTake)]),
+      ]);
+      card.style.borderTopColor = o.color;
+      return card;
+    });
+    this.show(
+      el("div", "panel offersPanel", [
+        el("h1", "", ["The offers"]),
+        el("p", "", ["Harbor asked for a crew, and everyone heard. These messages were waiting when you got in. Whoever you fly for briefs you from here on, and it cannot be undone."]),
+        el("div", "offers", cards),
+        el("div", "actions", [button("Decide later", opts.onLater, "secondary")]),
+      ]),
+    );
+  }
+
+  /** The contract board at a base: work the factions are paying for, as the war stands. */
+  showContracts(opts: ContractOptions): void {
+    const cards = opts.contracts.map((c) => {
+      const card = el("div", "offer", [
+        el("h2", "", [c.title]),
+        el("p", "dim", [c.from]),
+        ...c.text.map((line) => el("p", "", [line])),
+        el("p", "motto", [`Pays ${c.rewards.join(", ")}`]),
+        el("div", "actions", [button("Accept", c.onAccept)]),
+      ]);
+      const accept = card.querySelector("button")!;
+      accept.disabled = opts.busy !== null;
+      card.style.borderTopColor = c.color;
+      return card;
+    });
+    this.show(
+      el("div", "panel offersPanel", [
+        el("h1", "", ["Contracts"]),
+        el("p", "", [cards.length > 0 ? "Work on offer from the factions that will deal with you. The board changes as the war does." : "Nobody who will deal with you has work at the moment. Look again later."]),
+        ...(opts.busy ? [el("p", "bad", [opts.busy])] : []),
+        el("div", "offers", cards),
+        el("div", "actions", [button("Close", opts.onClose, "secondary")]),
+      ]),
+    );
+  }
+
+  showLog(opts: LogOptions): void {
+    this.show(
+      el("div", "panel wide", [
+        el("h1", "", ["Mission log"]),
+        el("h2", "", ["Now"]),
+        el("p", "", [opts.current ? `${opts.current.title}: ${opts.current.objective}` : (opts.next ?? "Nothing in hand. Contracts are posted at any base you hold.")]),
+        ...(opts.patron ? [el("h2", "", ["You fly for"]), el("p", "", [opts.patron])] : []),
+        el("h2", "", [`The Signal · ${opts.done.length} of ${opts.total}`]),
+        ...(opts.done.length > 0 ? opts.done.flatMap((d, i) => [el("p", "", [`${i + 1}. ${d.title} (${d.type})`]), el("p", "dim", [d.text])]) : [el("p", "dim", ["Nothing finished yet."])]),
+        el("div", "actions", [button("Close", opts.onClose)]),
+      ]),
+    );
+  }
+
+  /** The summary at the end of a mission. `onReplay` is null for missions that cannot be played again. */
+  showComplete(summary: MissionSummary, onReplay: (() => void) | null, onContinue: () => void): void {
     const mins = Math.floor(summary.seconds / 60);
     const secs = Math.floor(summary.seconds % 60);
     const rows: [string, string][] = [
@@ -479,14 +617,15 @@ export class Screens {
       ["Parts salvaged", String(summary.items)],
       ["Scrap", String(summary.scrap)],
     ];
+    if (summary.rewards.length > 0) rows.unshift(["Paid", summary.rewards.join(", ")]);
     const list = el("dl", "controls");
     for (const [k, v] of rows) list.append(el("dt", "", [k]), el("dd", "", [v]));
     this.show(
       el("div", "panel", [
-        el("h1", "", ["Outpost cleared"]),
-        el("p", "", ["The Combine garrison is destroyed and you made it home."]),
+        el("h1", "", [summary.title]),
+        el("p", "", [summary.text]),
         list,
-        el("div", "actions", [button("Play again", onReplay), button("Keep exploring", onContinue, "secondary")]),
+        el("div", "actions", onReplay ? [button("Play again", onReplay), button("Keep exploring", onContinue, "secondary")] : [button("Continue", onContinue)]),
       ]),
     );
   }

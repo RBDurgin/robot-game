@@ -81,7 +81,7 @@ test("economy: repairs are billed, parts are bought, fitted and sold, and it all
     const w = window.__game!.world;
     return { scrap: w.save.scrap, armR: w.player.weapons.armR?.def.id, version: w.save.version, parts: w.save.inventory.map((item) => item.id).sort() };
   });
-  expect(reloaded).toEqual({ scrap: 0, armR: "pulseRifle", version: 3, parts: ["arcLauncher", "pulseRifle", "pulseRifle", "slugCannon", "standardPlating"] });
+  expect(reloaded).toEqual({ scrap: 0, armR: "pulseRifle", version: 5, parts: ["arcLauncher", "pulseRifle", "pulseRifle", "slugCannon", "standardPlating"] });
   expect(errors).toEqual([]);
 });
 

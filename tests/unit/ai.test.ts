@@ -46,6 +46,23 @@ describe("thinkAi", () => {
     expect(ai.patrolIndex).toBe(1);
   });
 
+  it("under escort: walks a route once, waits when told, and never fights", () => {
+    const route = { passive: true, oneWay: true, target: target(30) };
+    const ai = createAiState();
+    ai.alerted = true;
+    const walking = run(ai, baseView(route), 1);
+    expect(ai.mode).toBe("patrol");
+    expect(walking.moveZ).toBe(1);
+    expect(walking.firePrimary).toBe(false);
+    expect(run(ai, baseView({ ...route, hold: true }), 0.1).moveZ).toBe(0);
+    // Past the last point of the route it stands where it is rather than starting again.
+    run(ai, baseView({ ...route, feet: { x: 0, y: 0, z: 48 } }), 0.1);
+    expect(ai.patrolIndex).toBe(1);
+    const end = run(ai, baseView({ ...route, feet: { x: 50, y: 0, z: 48 } }), 0.5);
+    expect(ai.patrolIndex).toBe(2);
+    expect(end.moveZ).toBe(0);
+  });
+
   it("ignores targets that are out of range or out of sight", () => {
     const far = createAiState();
     run(far, baseView({ target: target(DEFAULT_AI.detectRange + 50) }), 2);

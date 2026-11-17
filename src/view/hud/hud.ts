@@ -77,6 +77,8 @@ export interface HudState {
   objective: string;
   /** Short-lived notice, or null. */
   message: string | null;
+  /** The line of radio dialogue being spoken, or null. */
+  comms: { speaker: string; text: string } | null;
   /** Player's view yaw in radians (0 = north, +Z). */
   heading: number;
   /** Bearing and distance to the current objective, if any. */
@@ -123,6 +125,7 @@ export class Hud {
   private readonly objective: TextBlock;
   private readonly compass: TextBlock;
   private readonly message: TextBlock;
+  private readonly comms: TextBlock;
   private readonly info: TextBlock;
   private readonly damageVeil: Rectangle;
   private readonly markers = new Map<TransformNode, Rectangle>();
@@ -202,6 +205,13 @@ export class Hud {
     top.addControl(this.objective);
     top.addControl(this.message);
     top.addControl(this.targetPanel);
+    // Radio dialogue sits under the target readout, wrapped over two lines at most.
+    this.comms = text("comms", 14, "#9fe8ff");
+    this.comms.height = "44px";
+    this.comms.textWrapping = true;
+    this.comms.outlineWidth = 2;
+    this.comms.outlineColor = "#000000";
+    top.addControl(this.comms);
     this.ui.addControl(top);
 
     // Bottom left: section health, then resource bars.
@@ -391,6 +401,7 @@ export class Hud {
     this.compass.text = compass;
     this.objective.text = state.objective;
     this.message.text = state.message ?? "";
+    this.comms.text = state.comms ? `${state.comms.speaker.toUpperCase()}: ${state.comms.text}` : "";
     this.info.text = state.info;
 
     this.updateRadar(state.radar);
