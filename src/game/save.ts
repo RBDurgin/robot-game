@@ -1,8 +1,11 @@
 import { FRAMES, HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
-import { MISSIONS } from "../data/missions";
+import { isWarFactionId, type WarFactionId } from "../data/factions";
+import { campaign } from "../data/missions";
+import { patronOf } from "../data/patrons";
 import { addItem, findItem, fitFromLoadout, isPlatingItem, isWeaponItem, parseSpec, plainSpec, type Fit, type Inventory, type Item } from "../sim/items";
 import { isPlatingId, isWeaponId } from "../sim/loadout";
+import { contractDef, contractId, parseContract, type ContractSpec } from "../sim/contracts";
 import { parseMissionState, type MissionState } from "../sim/mission";
 import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
 import { frameUnlocked, isUnlockId, mountUnlocked, unlocksUsed } from "../sim/unlocks";
@@ -25,8 +28,9 @@ export interface Settings {
  * 2: parts are individual items with a tier and modifiers; the loadout became a `fit` of them.
  * 3: frames and shoulder mounts have to be unlocked.
  * 4: scripted missions: which are done and how far the one in progress has got.
+ * 5: the patron the player chose at the midpoint of the campaign, and the contract in progress.
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export interface SaveData {
   version: number;
@@ -65,6 +69,10 @@ export interface SaveData {
 export interface MissionProgress {
   done: string[];
   active: MissionState | null;
+  /** The faction the player took as patron at the midpoint of the campaign, once they have. */
+  patron: WarFactionId | null;
+  /** The contract `active` is the mission of, when it is one. */
+  contract: ContractSpec | null;
 }
 
 export interface SavedPosition {
@@ -92,7 +100,7 @@ export function freshSave(): SaveData {
     looted: [],
     standing: startingStanding(),
     war: null,
-    missions: { done: [], active: null },
+    missions: { done: [], active: null, patron: null, contract: null },
   };
 }
 
@@ -155,8 +163,13 @@ function toMissions(data: Record<string, unknown>): void {
   data.missions = { done: cleared ? ["first-outpost"] : [], active: null };
 }
 
+/** Version 4 to 5: nobody had been asked to choose a patron yet, and there were no contracts. */
+function toPatron(data: Record<string, unknown>): void {
+  if (data.missions && typeof data.missions === "object") data.missions = { ...data.missions, patron: null, contract: null };
+}
+
 /** `MIGRATIONS[n]` turns version n data into version n + 1, in place. */
-const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks, 3: toMissions };
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks, 3: toMissions, 4: toPatron };
 
 /** A copy of stored data brought up to the current version. */
 export function migrateSave(raw: Record<string, unknown>): Record<string, unknown> {
@@ -226,9 +239,14 @@ export function parseSave(raw: unknown): SaveData {
   save.standing = parseStanding(data.standing);
   save.war = data.war && typeof data.war === "object" ? (data.war as WarState) : null;
   // A mission that has been rewritten since the save restarts from its first stage.
-  const m = (data.missions && typeof data.missions === "object" ? data.missions : {}) as { done?: unknown; active?: unknown };
-  const done = parseIds(m.done).filter((id) => MISSIONS.some((def) => def.id === id));
-  const active = parseMissionState(m.active, MISSIONS);
-  save.missions = { done, active: active && !done.includes(active.id) ? active : null };
+  const m = (data.missions && typeof data.missions === "object" ? data.missions : {}) as { done?: unknown; active?: unknown; patron?: unknown; contract?: unknown };
+  const patron = isWarFactionId(m.patron) && patronOf(m.patron) ? m.patron : null;
+  const missions = campaign(patron);
+  const done = parseIds(m.done).filter((id) => missions.some((def) => def.id === id));
+  // A contract is kept only with the mission it stands for.
+  const contract = parseContract(m.contract);
+  const active = parseMissionState(m.active, contract ? [...missions, contractDef(contract)] : missions);
+  const working = active !== null && contract !== null && active.id === contractId(contract);
+  save.missions = { done, active: active && !done.includes(active.id) ? active : null, patron, contract: working ? contract : null };
   return save;
 }

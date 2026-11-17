@@ -1,11 +1,17 @@
-import { BASE_PLACE, type Line, type MissionDef } from "../sim/mission";
+import type { WarFactionId } from "./factions";
+import { patronOf } from "./patrons";
+import { BASE_PLACE, type Action, type Condition, type Line, type MissionDef } from "../sim/mission";
+import type { ItemSpec } from "../sim/items";
+import type { PatronDef } from "../sim/patron";
 
 /** The voices on the radio. The player is Magpie. */
 const hale = (text: string): Line => ({ speaker: "Hale", text });
 const magpie = (text: string): Line => ({ speaker: "Magpie", text });
+const varga = (text: string): Line => ({ speaker: "Varga", text });
 
 /**
- * The scripted missions, in the order they are offered: the campaign in `docs/story-outline.md`.
+ * The first half of the campaign in `docs/story-outline.md`, in the order it is offered: the
+ * missions everyone plays, before choosing a patron. The rest are in `patronMissions`.
  * A mission is written entirely here: see `MissionDef` in `src/sim/mission.ts` for what a stage
  * can wait for and do. A unit test checks every place, site, squad and stage these refer to.
  */
@@ -196,4 +202,323 @@ export const MISSIONS: MissionDef[] = [
   },
 ];
 
-export const missionById = (id: string): MissionDef | undefined => MISSIONS.find((m) => m.id === id);
+/** What each patron says about the missions they send the player on. Keyed by the patron's faction. */
+interface PatronText {
+  key: string[];
+  keyFound: string;
+  keyDebrief: string;
+  /** The engineer who carries the key to the Carrier. */
+  engineer: string;
+  walk: string[];
+  walkMeet: string;
+  walkEnd: string;
+  walkDebrief: string;
+  /** What the patron says before the duel, and how it ends for them. */
+  duel: string[];
+  ending: Line[];
+  endingDebrief: string;
+  /** The part the patron hands over at the end. */
+  gift: ItemSpec;
+}
+
+const PATRON_TEXT: Record<string, PatronText> = {
+  drifters: {
+    key: [
+      "Hale has been through the Carrier's old traffic. It will only open for its own command key, and the key was last logged aboard an escort that went down at the Broken Span.",
+      "The Combine have read the same logs: their salvage teams are already closing on the Span. Find the key in the wreckage and get out before they finish. We cannot buy another.",
+    ],
+    keyFound: "That's it. That little thing is four warm winters. Now bring it home.",
+    keyDebrief: "The command key is in the Compact's hands. Brandt has it locked in the yard strongbox and an engineer already asking how soon she can leave.",
+    engineer: "Pell",
+    walk: [
+      "The key is no use in a strongbox. Pell is the best grid engineer the Compact has, and she is walking it to the Carrier in a suit with a cable drum where the guns should be.",
+      "Meet her at the Broken Span and take her east. The Combine have pickets across the basin road. She cannot fight, so you will. Some of our pilots will meet you at the hull.",
+    ],
+    walkMeet: "Magpie? Pell. I've got forty kilos of cable and no guns, so I'll walk when you're close and stop when you're not. Lead on.",
+    walkEnd: "That's the hull. Look at the size of it. Give me a day and a quiet corner.",
+    walkDebrief: "Pell and the key are at the Carrier, with Compact pilots dug in around her. One Combine suit did not join the fight. It watched from the ridge the whole time.",
+    duel: [
+      "Pell has the hatch ready and the key in the lock. She will not turn it, because a Combine command suit has walked down off the ridge and is standing in front of the hull, alone.",
+      "That is Ilse Varga, Kestrel One. She has asked for you by name. Go and hear her out, and then do what you have to. The lights are on the other side of her.",
+    ],
+    ending: [
+      hale("Pell's tied it in. Four settlements just came up on the grid at once. Brandt is pretending he isn't crying."),
+      { speaker: "Harbor", text: "Crew aboard. Thank you. What watch is it, please?" },
+      hale("It keeps asking that."),
+      magpie("Somebody tell it."),
+    ],
+    endingDebrief: "Harbor's reactor is tied into the Compact's grid, and the settlements have light. Harbor has a crew again, of a sort. It keeps asking what watch it is.",
+    gift: { id: "lanceBeam", tier: 3, mods: ["cooled", "longRange"] },
+  },
+  wardens: {
+    key: [
+      "The Carrier answers to a command key. Without it nobody gets in, which would suit me, except the Combine know where it is: an escort wreck at the Broken Span.",
+      "Their salvage teams are closing on it now. Find the key first and get clear. A door is only shut if we hold what opens it.",
+    ],
+    keyFound: "Good. Do not plug it into anything. Walk it out.",
+    keyDebrief: "The command key is with the Wardens. Sorrel has put it under guard and sent for an engineer who knows how to weld a hull shut.",
+    engineer: "Aldous",
+    walk: [
+      "To seal the Carrier we must first open it, once, and shut down what is inside in the proper order. Sapper Aldous will carry the key and do the work.",
+      "Meet him at the Broken Span and bring him east. The Combine have pickets across the basin road and his suit carries tools, not weapons. A Warden section will hold the hull for your arrival.",
+    ],
+    walkMeet: "Sapper Aldous. I move when you are near and hold when you are not. I would be obliged if nothing shot me.",
+    walkEnd: "There she is. Forty years of other people's mistakes. I'll need the hatch and some quiet.",
+    walkDebrief: "Aldous and the key are at the Carrier, with a Warden section around him. One Combine suit did not join the fight. It watched from the ridge the whole time.",
+    duel: [
+      "Aldous is ready to open the Carrier and shut it down. He cannot begin: a Combine command suit has come down off the ridge and is standing before the hull, alone.",
+      "Commander Varga. Kestrel One. She has asked for you by name. Hear her, then remove her. That door closes today.",
+    ],
+    ending: [
+      { speaker: "Sorrel", text: "Aldous is welding the last hatch. It is done." },
+      { speaker: "Harbor", text: "Understood. Standing down. Will someone tell me when it is safe to wake?" },
+      magpie("We'll tell you."),
+      hale("Will we?"),
+    ],
+    endingDebrief: "Sorrel's engineers have sealed the hull, and the Wardens stand watch on it. Harbor asked to be told when it is safe to wake, and Magpie said they would. Nobody believes it.",
+    gift: { id: "heavyPlating", tier: 3, mods: ["light", "reinforced"] },
+  },
+  syndicate: {
+    key: [
+      "My buyers want proof the ship opens. The proof is a command key, and it is lying in an escort wreck at the Broken Span.",
+      "The Combine's salvage teams are on their way to pick it up. Be quicker. If you bring it back in one piece there is a bonus; if you bring it back at all I will be pleasantly surprised.",
+    ],
+    keyFound: "Lovely. The price just doubled. Do try not to drop it.",
+    keyDebrief: "The command key is with Lys, who has photographed it from every side and named a figure that made Hale put her cup down.",
+    engineer: "Quill",
+    walk: [
+      "My buyers will not pay for a locked box. Quill appraises things for me; he will carry the key to the Carrier and tell me what is actually in there.",
+      "Meet him at the Broken Span and walk him east. The Combine have pickets on the basin road and Quill is not a fighter, whatever he tells you. I have hired some hands to meet you at the hull.",
+    ],
+    walkMeet: "You're the escort? Quill. I walk when you're near, I stop when you're not, and I bill by the hour either way.",
+    walkEnd: "Oh, that is a lot of ship. Lys is going to need a bigger number.",
+    walkDebrief: "Quill and the key are at the Carrier, with Lys's hired suits around him. One Combine suit did not join the fight. It watched from the ridge the whole time.",
+    duel: [
+      "Quill says the ship is worth more than he can count, which I have never heard him say. He cannot get in: a Combine command suit is standing in front of the hull, alone.",
+      "Ilse Varga, Kestrel One. She asked for you by name, which is flattering. Hear what she is offering. Then remember that I am offering more.",
+    ],
+    ending: [
+      { speaker: "Lys", text: "Sold. The buyer's people are already on their way. Your tenth is in your account, Magpie, and it is a very large tenth." },
+      { speaker: "Harbor", text: "I do not recognise this crew. Is this the crew?" },
+      magpie("Hale? You there?"),
+      magpie("Hale."),
+    ],
+    endingDebrief: "Lys had a buyer before the dust settled. You have been paid very well. Hale did not speak to you on the walk home.",
+    gift: { id: "scatterGun", tier: 3, mods: ["cooled", "rapid"] },
+  },
+};
+
+/** The second half of the campaign, as the patron the player chose would have it. */
+export function patronMissions(patron: PatronDef): MissionDef[] {
+  const text = PATRON_TEXT[patron.faction]!;
+  const boss = (line: string): Line => ({ speaker: patron.speaker, text: line });
+  const pays = (scrap: number): MissionDef["reward"] => ({ scrap: Math.round(scrap * patron.scrapRate), standing: { [patron.faction]: patron.standingPay } });
+  const tech = (line: string): Line => ({ speaker: text.engineer, text: line });
+  // The suit under escort lasts the whole mission: each stage names it, with where it would be by then.
+  const engineer = (at: string, route: string[]): Action => ({ do: "spawn", tag: "engineer", faction: patron.faction, members: ["scout"], at, route, stance: "allied", passive: true, waitFor: 110, tough: 2.5, keep: true });
+  const lost: Condition = { when: "destroyed", tag: "engineer", count: 1 };
+  return [
+    {
+      id: "dead-reckoning",
+      title: "Dead Reckoning",
+      type: "salvage",
+      requires: ["the-needle"],
+      briefing: { from: `${patron.name}, ${patron.role}`, text: text.key },
+      places: {
+        "span-ground": { x: -1500, z: 1250, radius: 380 },
+        "hull-1": { x: -1585, z: 1300, radius: 24 },
+        "hull-2": { x: -1420, z: 1345, radius: 24 },
+        "hull-3": { x: -1455, z: 1165, radius: 24 },
+      },
+      stages: [
+        {
+          id: "travel",
+          objective: "Go to the Broken Span",
+          waypoint: { place: "broken-span", label: "SPAN" },
+          enter: [{ do: "spawn", tag: "salvagers", faction: "combine", members: ["line", "rifle", "scout"], at: "broken-span" }],
+          goals: [{ when: "inArea", place: "span-ground" }],
+        },
+        {
+          id: "hull-1",
+          objective: "Search the escort's wreckage: bow section",
+          waypoint: { place: "hull-1", label: "WRECK" },
+          enter: [{ do: "say", lines: [hale("The escort broke in three when it came down. The key was on the bridge, wherever the bridge ended up."), magpie("Combine salvagers under the arch. They've started without us.")] }],
+          goals: [{ when: "inArea", place: "hull-1" }],
+        },
+        {
+          id: "hull-2",
+          objective: "Search the escort's wreckage: midships",
+          waypoint: { place: "hull-2", label: "WRECK" },
+          enter: [{ do: "say", lines: [magpie("Bow section. Crew racks and not much else."), hale("Then try midships. East of you.")] }],
+          goals: [{ when: "inArea", place: "hull-2" }],
+        },
+        {
+          id: "key",
+          objective: "Recover the command key from the stern section",
+          waypoint: { place: "hull-3", label: "KEY" },
+          enter: [
+            { do: "say", lines: [magpie("Nothing here either."), hale("I have a transponder, very faint. Stern section, south of the arch. That's it, Magpie.")] },
+            { do: "drop", tag: "command-key", name: "Carrier command key", at: "hull-3" },
+          ],
+          goals: [{ when: "collected", tag: "command-key", count: 1 }],
+        },
+        {
+          id: "escape",
+          objective: "Get clear of the Span before the ring closes: {time}s",
+          waypoint: { place: BASE_PLACE, label: "BASE" },
+          enter: [
+            { do: "say", lines: [boss(text.keyFound), hale("Two more Combine teams, north and south-east, closing fast. They know you have it. Go.")] },
+            { do: "spawn", tag: "ring-north", faction: "combine", members: ["line", "heavy", "scout"], at: "broken-span", distance: 330, bearing: 350, stance: "hostile", alert: true },
+            { do: "spawn", tag: "ring-south", faction: "combine", members: ["line", "marksman", "lancer"], at: "broken-span", distance: 330, bearing: 140, stance: "hostile", alert: true },
+          ],
+          goals: [{ when: "outsideArea", place: "span-ground" }],
+          fail: [{ when: "elapsed", seconds: 150 }, { when: "playerDestroyed" }],
+        },
+      ],
+      complete: [{ do: "say", lines: [magpie("Clear of the Span. Key's aboard."), hale("Then come home before they work out which way you went.")] }],
+      debrief: { title: "Key recovered", text: text.keyDebrief },
+      reward: pays(350),
+    },
+    {
+      id: "long-walk",
+      title: "Long Walk",
+      type: "escort",
+      requires: ["dead-reckoning"],
+      briefing: { from: `${patron.name}, ${patron.role}`, text: text.walk },
+      places: {
+        "span-meet": { x: -1440, z: 1245, radius: 70 },
+        "picket-1": { x: -600, z: 1220, radius: 70 },
+        "picket-2": { x: 350, z: 1190, radius: 70 },
+        "carrier-approach": { x: 1260, z: 1150, radius: 30 },
+        "carrier-ground": { x: 1350, z: 1150, radius: 130 },
+      },
+      stages: [
+        {
+          id: "meet",
+          objective: `Meet ${text.engineer} at the Broken Span`,
+          waypoint: { place: "span-meet", label: "MEET" },
+          enter: [engineer("span-meet", ["picket-1", "picket-2", "carrier-approach"])],
+          goals: [{ when: "inArea", place: "span-meet" }],
+          fail: [lost],
+        },
+        {
+          id: "leg-1",
+          objective: `Escort ${text.engineer} east: clear the first picket`,
+          waypoint: { place: "picket-1", label: "PICKET" },
+          enter: [
+            engineer("span-meet", ["picket-1", "picket-2", "carrier-approach"]),
+            { do: "say", lines: [tech(text.walkMeet), hale("First picket is about nine hundred metres east of you, on the road. Go ahead and clear it, then bring them through.")] },
+            { do: "spawn", tag: "picket-1", faction: "combine", members: ["line", "scout", "rifle"], at: "picket-1", stance: "hostile" },
+          ],
+          goals: [{ when: "arrived", tag: "engineer", place: "picket-1" }],
+          fail: [lost],
+        },
+        {
+          id: "leg-2",
+          objective: `Escort ${text.engineer} east: clear the second picket`,
+          waypoint: { place: "picket-2", label: "PICKET" },
+          enter: [
+            engineer("picket-1", ["picket-2", "carrier-approach"]),
+            { do: "say", lines: [hale("That's one. The second is heavier: they have a siege suit sitting on the road."), magpie("Then it can sit somewhere else.")] },
+            { do: "spawn", tag: "picket-2", faction: "combine", members: ["line", "heavy", "marksman"], at: "picket-2", stance: "hostile" },
+          ],
+          goals: [{ when: "arrived", tag: "engineer", place: "picket-2" }],
+          fail: [lost],
+        },
+        {
+          id: "leg-3",
+          objective: `Escort ${text.engineer} to the Fallen Carrier`,
+          waypoint: { place: "fallen-carrier", label: "CARRIER" },
+          enter: [
+            engineer("picket-2", ["carrier-approach"]),
+            { do: "say", lines: [boss("My people are coming in on the hull from the south. The Combine got there first. Help them."), hale("You can see it from there, Magpie. It really is the size of a town.")] },
+            { do: "spawn", tag: "hull-guard", faction: "combine", members: ["line", "heavy", "scout", "marksman"], at: "fallen-carrier", stance: "hostile" },
+            { do: "spawn", tag: "friends", faction: patron.faction, members: ["line", "line", "rifle"], at: "fallen-carrier", distance: 260, bearing: 180, stance: "allied", alert: true },
+          ],
+          goals: [{ when: "arrived", tag: "engineer", place: "carrier-ground" }],
+          fail: [lost],
+        },
+      ],
+      complete: [{ do: "say", lines: [tech(text.walkEnd), magpie("Hale. There's a Combine command suit on the ridge. Same one as at the Dish. It isn't shooting."), hale("Kestrel One. She's waiting for something. Come home; I don't like it.")] }],
+      debrief: { title: "The long walk", text: text.walkDebrief },
+      reward: pays(450),
+    },
+    {
+      id: "kestrel-one",
+      title: "Kestrel One",
+      type: "duel",
+      requires: ["long-walk"],
+      briefing: { from: `${patron.name}, ${patron.role}`, text: text.duel },
+      places: { "carrier-ground": { x: 1350, z: 1150, radius: 130 } },
+      stages: [
+        {
+          id: "travel",
+          objective: "Go to the Fallen Carrier",
+          waypoint: { place: "fallen-carrier", label: "CARRIER" },
+          goals: [{ when: "inArea", place: "carrier-ground" }],
+        },
+        {
+          id: "parley",
+          objective: "Hear Varga out",
+          waypoint: { place: "fallen-carrier", label: "CARRIER" },
+          enter: [
+            {
+              do: "say",
+              lines: [
+                varga("Magpie. Varga. You have been a step ahead of me since the Dish, and I have not minded."),
+                varga("Walk away. The Combine pays your salvage rate for a year and nobody on this field is hurt."),
+                magpie("I gave my word to someone."),
+                varga("So did I. Then let's be quick about it."),
+              ],
+            },
+          ],
+          goals: [{ when: "elapsed", seconds: 20 }],
+          fail: [{ when: "playerDestroyed" }],
+        },
+        {
+          id: "duel",
+          objective: "Defeat Kestrel One",
+          waypoint: { place: "fallen-carrier", label: "VARGA" },
+          enter: [
+            {
+              do: "spawn",
+              tag: "varga",
+              faction: "combine",
+              members: ["line"],
+              ace: { name: "Kestrel One", member: { frame: "medium", loadout: "kestrelOne", role: "skirmisher" }, deadly: 1.5 },
+              tough: 3,
+              at: "fallen-carrier",
+              distance: 150,
+              bearing: 0,
+              stance: "hostile",
+              alert: true,
+            },
+          ],
+          goals: [{ when: "destroyed", tag: "varga", count: 1 }],
+          fail: [{ when: "playerDestroyed" }],
+        },
+      ],
+      complete: [{ do: "say", lines: [varga("Well flown. Keep your word, then."), { speaker: "Harbor", text: "Command key accepted. Opening. Welcome aboard." }, ...text.ending] }],
+      debrief: { title: "The Carrier opens", text: text.endingDebrief },
+      reward: { ...pays(600), items: [text.gift] },
+    },
+  ];
+}
+
+/** How many missions the whole campaign has, whoever the patron is. */
+export const CAMPAIGN_LENGTH = 6;
+
+/** The campaign as it stands for a player: the shared missions, then their patron's once they have one. */
+export function campaign(patron: WarFactionId | null): MissionDef[] {
+  const def = patronOf(patron);
+  return def ? [...MISSIONS, ...patronMissions(def)] : MISSIONS;
+}
+
+const CAMPAIGNS = new Map<WarFactionId | null, MissionDef[]>();
+
+/** `campaign`, built once per patron: the game asks every frame. */
+export function campaignOf(patron: WarFactionId | null): MissionDef[] {
+  let missions = CAMPAIGNS.get(patron);
+  if (!missions) CAMPAIGNS.set(patron, (missions = campaign(patron)));
+  return missions;
+}

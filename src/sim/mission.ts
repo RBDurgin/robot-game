@@ -6,7 +6,8 @@
  * effects it hands back (`stepMission`).
  */
 
-import type { RosterSlot, WarFactionId } from "../data/factions";
+import type { RosterSlot, SquadMember, WarFactionId } from "../data/factions";
+import { parseSpec, specKey, type ItemSpec } from "./items";
 
 export type MissionType = "assault" | "defend" | "escort" | "recon" | "salvage" | "duel";
 
@@ -43,15 +44,17 @@ export type Condition =
   /** No defenders are left at a site. */
   | { when: "siteCleared"; site: string }
   /** The player is inside a place: a site, one of the mission's own places, or `BASE_PLACE`. */
-  | { when: "inArea"; place: string }
-  /** The player is not inside a place. */
-  | { when: "outsideArea"; place: string }
+  | { when: "inArea"; place: string; radius?: number }
+  /** The player is not inside a place. `radius`, here and above, is used instead of the place's own. */
+  | { when: "outsideArea"; place: string; radius?: number }
   /** So many mechs destroyed since the stage began, optionally only those matching. */
   | { when: "destroyed"; count: number; tag?: string; faction?: string; site?: string; byPlayer?: boolean }
   /** So many items picked up since the stage began. */
   | { when: "collected"; count: number; tag?: string }
   /** A site taken by someone (or by `by`) since the stage began. */
   | { when: "siteCaptured"; site: string; by?: string }
+  /** Every living pilot of a squad the mission brought in is inside a place (and at least one lives). */
+  | { when: "arrived"; tag: string; place: string }
   /** The stage has lasted this long. */
   | { when: "elapsed"; seconds: number }
   /** The player's suit destroyed since the stage began. */
@@ -78,16 +81,52 @@ export interface SpawnDef {
   stance?: "hostile" | "allied";
   /** Already hunting when it appears, rather than waiting to spot someone. */
   alert?: boolean;
+  /**
+   * Places to walk through, once, in order, rather than circling `at`. The squad stops at the
+   * last.
+   */
+  route?: string[];
+  /** Never fights: keeps to its route whatever is shooting at it. */
+  passive?: boolean;
+  /** Under escort: moves only while the player is within this many metres, and waits otherwise. */
+  waitFor?: number;
+  /** Armour and structure as a multiple of what such a pilot usually has. */
+  tough?: number;
+  /**
+   * A named pilot with a build of their own, in place of the roster's: every member of the
+   * squad is this pilot, so such a squad has one member. `deadly` multiplies their damage.
+   */
+  ace?: { name: string; member: SquadMember; deadly?: number };
+  /**
+   * Left alone if the squad is already in the world. For a squad that lasts across stages:
+   * each stage names it again, with where it should be by then, so that a mission picked up
+   * from a save at that stage has it.
+   */
+  keep?: boolean;
+}
+
+/** Something for the player to pick up, left at a place by a mission. */
+export interface DropDef {
+  /** Names the pickup for `collected` goals. Unique within the mission. */
+  tag: string;
+  /** What the player is told they have picked up. */
+  name: string;
+  at: string;
 }
 
 /** Something a mission does to the world on entering a stage or on finishing. */
-export type Action = { do: "say"; lines: Line[] } | { do: "notify"; text: string; seconds?: number } | ({ do: "spawn" } & SpawnDef);
+export type Action =
+  | { do: "say"; lines: Line[] }
+  | { do: "notify"; text: string; seconds?: number }
+  | ({ do: "spawn" } & SpawnDef)
+  | ({ do: "drop" } & DropDef);
 
 export interface StageDef {
   id: string;
   /**
    * The objective line on the HUD. `{left}` is what remains of the first goal (defenders,
-   * kills, items or time), `{s}` is "s" unless that is exactly one, and `{salvage}` notes
+   * kills, items or time), `{s}` is "s" unless that is exactly one, `{time}` is the seconds left
+   * before the stage's time limit (its first `elapsed` way of failing) and `{salvage}` notes
    * salvage still lying about.
    */
   objective: string;
@@ -122,8 +161,8 @@ export interface MissionDef {
   complete?: Action[];
   /** Heading and text of the summary shown at the end. */
   debrief: { title: string; text: string };
-  /** Paid on completion. Standing is by faction id. */
-  reward: { scrap: number; standing?: Record<string, number> };
+  /** Paid on completion. Standing is by faction id; `items` are parts handed over. */
+  reward: { scrap: number; standing?: Record<string, number>; items?: ItemSpec[] };
 }
 
 /** Where a mission in progress has got to. Plain data: it is saved as it is. */
@@ -141,8 +180,11 @@ export interface MissionState {
 
 /** What the interpreter asks about the world as it stands. */
 export interface MissionFacts {
-  inArea(place: string): boolean;
+  /** Whether the player is inside a place: within its own radius, or `radius` if given. */
+  inArea(place: string, radius?: number): boolean;
   defendersAt(site: string): number;
+  /** Whether every living pilot of a squad the mission brought in is inside a place, and one lives. */
+  squadIn(tag: string, place: string): boolean;
 }
 
 export type MissionEffect = Action | { do: "stage"; stage: string } | { do: "complete" } | { do: "fail" };
@@ -213,11 +255,13 @@ function holds(c: Condition, count: number, time: number, facts: MissionFacts): 
     case "siteCleared":
       return facts.defendersAt(c.site) === 0;
     case "inArea":
-      return facts.inArea(c.place);
+      return facts.inArea(c.place, c.radius);
     case "outsideArea":
-      return !facts.inArea(c.place);
+      return !facts.inArea(c.place, c.radius);
     case "elapsed":
       return time >= c.seconds;
+    case "arrived":
+      return facts.squadIn(c.tag, c.place);
     default:
       return count >= targetOf(c);
   }
@@ -264,8 +308,10 @@ function remaining(stage: StageDef, state: MissionState, facts: MissionFacts): n
 export function objectiveText(def: MissionDef, state: MissionState, facts: MissionFacts, salvage = 0): string {
   const stage = currentStage(def, state);
   const left = remaining(stage, state, facts);
+  const limit = (stage.fail ?? []).find((c) => c.when === "elapsed");
   return stage.objective
     .replace("{left}", left === null ? "" : String(left))
+    .replace("{time}", limit?.when === "elapsed" ? String(Math.max(0, Math.ceil(limit.seconds - state.time))) : "")
     .replace("{s}", left === 1 ? "" : "s")
     .replace("{salvage}", salvage > 0 ? ` (${salvage} salvage left)` : "");
 }
@@ -315,6 +361,10 @@ export function missionProblems(defs: readonly MissionDef[], refs: MissionRefs):
     ids.add(def.id);
     for (const id of def.requires) if (!defs.slice(0, defs.indexOf(def)).some((m) => m.id === id)) say(`requires "${id}", which is not an earlier mission`);
     for (const f of Object.keys(def.reward.standing ?? {})) if (!refs.factions.has(f)) say(`rewards standing with unknown faction "${f}"`);
+    for (const item of def.reward.items ?? []) {
+      const read = parseSpec(item);
+      if (!read || specKey(read) !== specKey(item)) say(`rewards a part that is not valid: ${JSON.stringify(item)}`);
+    }
     if (def.stages.length === 0) {
       say("has no stages");
       continue;
@@ -324,10 +374,19 @@ export function missionProblems(defs: readonly MissionDef[], refs: MissionRefs):
     const spawns = def.stages.flatMap((stage) => (stage.enter ?? []).flatMap((a) => (a.do === "spawn" ? [a] : [])));
     const tags = new Set<string>();
     for (const spawn of spawns) {
-      if (tags.has(spawn.tag)) say(`squad tag "${spawn.tag}" is used twice`);
+      // A squad that lasts across stages is named in each of them; any other tag is used once.
+      if (tags.has(spawn.tag) && !spawns.every((sp) => sp.tag !== spawn.tag || sp.keep)) say(`squad tag "${spawn.tag}" is used twice`);
       tags.add(spawn.tag);
+      for (const id of spawn.route ?? []) if (!place(id) || id === BASE_PLACE) say(`squad "${spawn.tag}" has unknown place "${id}" on its route`);
       if (spawn.members.length === 0) say(`squad "${spawn.tag}" has no members`);
       if (!place(spawn.at) || spawn.at === BASE_PLACE) say(`squad "${spawn.tag}" appears at unknown place "${spawn.at}"`);
+    }
+    const drops = def.stages.flatMap((stage) => (stage.enter ?? []).flatMap((a) => (a.do === "drop" ? [a] : [])));
+    const dropTags = new Set<string>();
+    for (const drop of drops) {
+      if (dropTags.has(drop.tag)) say(`pickup tag "${drop.tag}" is used twice`);
+      dropTags.add(drop.tag);
+      if (!place(drop.at) || drop.at === BASE_PLACE) say(`pickup "${drop.tag}" lies at unknown place "${drop.at}"`);
     }
     if (!def.auto && !def.briefing) say("has no briefing, and does not start by itself");
     for (const stage of def.stages) {
@@ -338,11 +397,13 @@ export function missionProblems(defs: readonly MissionDef[], refs: MissionRefs):
       if (stage.next !== undefined && !stageOf(def, stage.next)) at(`next stage "${stage.next}" does not exist`);
       if (stage.waypoint && !place(stage.waypoint.place)) at(`waypoint at unknown place "${stage.waypoint.place}"`);
       for (const c of [...stage.goals, ...(stage.fail ?? [])]) {
-        if ((c.when === "inArea" || c.when === "outsideArea") && !place(c.place)) at(`unknown place "${c.place}"`);
+        if (c.when === "arrived" && !tags.has(c.tag)) at(`no squad is tagged "${c.tag}"`);
+        if ((c.when === "inArea" || c.when === "outsideArea" || c.when === "arrived") && !place(c.place)) at(`unknown place "${c.place}"`);
         if ((c.when === "siteCleared" || c.when === "siteCaptured") && !refs.sites.has(c.site)) at(`unknown site "${c.site}"`);
         if (c.when === "destroyed" && c.site !== undefined && !refs.sites.has(c.site)) at(`unknown site "${c.site}"`);
         if (c.when === "destroyed" && c.tag !== undefined && !tags.has(c.tag)) at(`no squad is tagged "${c.tag}"`);
         if (c.when === "destroyed" && c.tag !== undefined && c.count > (spawns.find((sp) => sp.tag === c.tag)?.members.length ?? Infinity)) at(`squad "${c.tag}" has fewer than ${c.count} pilots`);
+        if (c.when === "collected" && c.tag !== undefined && !dropTags.has(c.tag)) at(`no pickup is tagged "${c.tag}"`);
         if (c.when === "destroyed" && c.faction !== undefined && !refs.factions.has(c.faction)) at(`unknown faction "${c.faction}"`);
         if ((c.when === "destroyed" || c.when === "collected") && !(c.count >= 1)) at("a count must be at least 1");
         if (c.when === "elapsed" && !(c.seconds > 0)) at("a time must be more than 0");

@@ -23,6 +23,10 @@ export class AiController {
   target: MechEntity | null = null;
   /** Wingmen: the mech to stay close to when there is nothing to fight. */
   follow: MechEntity | null = null;
+  /** Set for suits a mission has under escort: see `AiView`. */
+  passive = false;
+  oneWay = false;
+  hold = false;
 
   constructor(
     private readonly patrol: Vec3[],
@@ -106,6 +110,9 @@ export class AiController {
         follow: this.follow?.alive ? this.follow.feet : null,
         patrol: this.patrol,
         home: this.home,
+        passive: this.passive,
+        oneWay: this.oneWay,
+        hold: this.hold,
       },
       this.cfg,
       dt,

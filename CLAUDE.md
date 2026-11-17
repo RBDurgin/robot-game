@@ -63,7 +63,12 @@ Key seams:
 - `MissionDef` (`src/data/missions.ts`): a scripted mission is a data row of stages with goals.
   The interpreter in `src/sim/mission.ts` advances it from events the world emits
   (`World.emit`) and facts it asks for (`MissionFacts`). `World.mission` is the one in
-  progress; its state lives in `save.missions`.
+  progress; its state lives in `save.missions`. The missions after the midpoint depend on the
+  patron the player chose (`save.missions.patron`): ask `campaign(patron)` or `World.missions`
+  for the list, not `MISSIONS`, which is only the shared first half.
+- `ContractSpec` (`src/sim/contracts.ts`): repeatable work generated from the war and the
+  player's standing (`contractsOnOffer`). `contractDef` makes an ordinary `MissionDef` of one,
+  with an id starting `contract:`; the spec, not the def, is what is saved.
 - Hostility: `World.hostile(a, b)` is the one question to ask. Between AI factions it is fixed
   (`areHostile`); with the player it follows `save.standing` (`src/sim/reputation.ts`).
 
@@ -134,6 +139,14 @@ Key seams:
   is no site (it names that playing of the mission). Code that looks a record's site up must
   allow for that, as it does for raiders. They are not saved: a loaded mission restarts its
   current stage.
+- A patron's missions are written once in `patronMissions` and must keep the same ids, stages
+  and goals for every patron; only the words, the briefer and the pay differ. The unit tests
+  validate the campaign for each patron.
+- A squad that lasts across stages (the engineer under escort) is spawned with `keep` in every
+  stage it is alive in. Without that, a mission resumed from a save at a later stage has no
+  such squad.
+- Things a mission leaves to pick up (`drop`) wait for the ground under them to load, and like
+  its squads are not saved.
 - A mission's summary screen stops the clock (`mode` is "complete"), as do the briefing and
   every menu. E2E tests must not `waitTicks` after the step that ends a mission.
 - A site a mission is waiting to see cleared is frozen in the war (`awaitedSites`), so only
@@ -148,9 +161,11 @@ Backquote (`) toggles a stats overlay and live sliders for the player frame's ha
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
 and unlock every frame and mount.
 
-B at a base opens the briefing for the mission on offer. From the console,
+B at a base opens the briefing for the mission on offer, C the contract board; L opens the
+mission log anywhere. From the console,
 `__game.world.save.missions.done.push("first-outpost")` skips a mission when none is in
-progress: the next one is on offer at once.
+progress: the next one is on offer at once. After "the-needle", B at a base opens the patrons'
+offers instead; `__game.world.choosePatron("wardens")` takes one from the console.
 
 M opens the world map, which shows who holds what and the player's standing. From the console,
 `__game.world.war` is the war's state and `__game.world.save.standing.wardens = 50` changes a

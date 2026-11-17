@@ -58,10 +58,70 @@ The world, factions and progression exist by this point. Story gives them direct
   "Listening Post" (recon: reach the Dish and visit three masts past a Combine survey team) and
   "The Needle" (defend: three waves at the spire, failed by leaving it or being destroyed).
 
-Still to build: the patron choice after mission 3 and what it changes; a tagged pickup (the key
-in mission 4); a friendly suit that follows a route (mission 5); a named enemy with their own
-build (mission 6); markers in the world for mission places (the masts are only compass points
-so far); contracts; the mission log.
+- The patron choice. Once "The Needle" is done, no mission is on offer until the player has
+  heard the offers at a base (B) and taken one. The patrons are rows in `src/data/patrons.ts`;
+  who asks and what taking one does to standing are in `src/sim/patron.ts`. Brandt and Sorrel
+  ask only if their faction is not hostile; Lys always asks, because the campaign has the
+  player destroy seven Syndicate suits just before, which would otherwise rule her out every
+  time. Taking a patron makes their faction an ally (standing raised to at least `alliedAt`)
+  and costs 10 with each of the others who asked. The choice is in the save (version 5) and
+  cannot be undone.
+- The second half of the campaign is written once and filled in per patron: `patronMissions`
+  in `src/data/missions.ts` takes the patron and returns their missions (who briefs, what they
+  say, what it pays), and `campaign(patron)` is the whole list for a player. Ids are the same
+  whoever the patron is.
+- Step 4, salvage run. A stage can leave something to be picked up (`drop`): a gold crate with
+  a tag that `collected` goals can wait for. It is not saved, and goes when the mission ends.
+  A stage with a time limit can show it (`{time}` in the objective).
+- A place that is only a spot on the ground (a mast, a piece of wreck) has a beacon while it is
+  the waypoint: a column of light and a ring at the place's radius (`src/view/placeMarker.ts`).
+- Step 5, four of six. "Dead Reckoning" (salvage run): search three parts of a wreck at the
+  Broken Span past Combine salvagers, take the command key, and get clear within 150 seconds
+  while two more Combine teams close in.
+
+- Step 4, escort. A squad can walk a `route` once instead of circling a place, be `passive`
+  (never fights), wait for the player (`waitFor` metres), be tougher than usual (`tough`), and
+  last across stages (`keep`: each stage names it again with where it should be by then, so a
+  mission resumed at that stage has it). A stage can wait for a squad to reach a place
+  (`arrived`). The brain's part is three flags on `AiView`: `passive`, `oneWay`, `hold`.
+- Step 4, duel. A squad can be one named pilot with their own build (`ace`), with their damage
+  scaled (`deadly`). A mission can pay in parts (`reward.items`).
+- Step 5, six of six. "Long Walk" (escort): meet the patron's engineer at the Broken Span and
+  bring them 2.8 km east to the Fallen Carrier past two Combine pickets and a guard on the
+  hull, where the patron's pilots join the fight; failed if the engineer is destroyed.
+  "Kestrel One" (duel): Varga makes her offer at the hull, then fights alone in her own build;
+  failed if the player is destroyed. The ending (radio lines and summary) and the part handed
+  over depend on the patron.
+
+- Step 6, contracts. `contractsOnOffer` in `src/sim/contracts.ts` reads the war and the
+  player's standing and returns up to three `ContractSpec`s: for each faction that is not
+  hostile to the player, a raid on the strongest enemy site next to one of its own, and a
+  defence of its own most threatened site (one with a raid marching on it, or else the most
+  enemy pilots next door). The board turns over every `CONTRACTS.refreshTicks` war ticks.
+  `contractDef` turns a spec into an ordinary `MissionDef`: a raid waits for the site to be
+  cleared; a defence is two waves from the enemy's side, void if the player leaves. C at a
+  base opens the board. A contract pays scrap (more in dangerous regions) and standing with
+  the giver, does not count toward the campaign, and can be taken alongside it. The spec of
+  the one in progress is saved (`save.missions.contract`). Pay is in `src/data/contracts.ts`.
+- Step 3, the log. L opens the mission log anywhere: what is in hand, who the player flies
+  for, and the campaign missions finished with their summaries. Portraits are left to phase 7.
+
+Everything in the build steps is built. What is left is the playthrough.
+
+To check by playing:
+
+- Dead Reckoning: whether 150 seconds and a 380 m ring make the escape tense or trivial in
+  each frame.
+- Long Walk: the pace. The engineer is the patron's "scout" (a light suit for the Drifters and
+  the Syndicate, a medium for the Wardens) and walks at full walking speed, so the walk is
+  about four to five and a half minutes plus the fights. Also whether it gets stuck on terrain
+  on the way (it has only the usual hop to get unstuck), and whether 110 m is the right
+  distance for it to wait at.
+- Kestrel One: whether Varga (three times the armour, one and a half times the damage, a
+  skirmisher's movement) is a fair fight in each frame.
+- Whether the beacon reads well at a distance in a real browser.
+- Contracts: whether the pay is worth the trip next to salvage, and whether a defence with the
+  garrison's help is too easy.
 
 ## Build steps
 
@@ -101,10 +161,11 @@ Voice acting, cutscenes, branching dialogue trees. Keep choices to which mission
 - [x] Story outline approved
 - [x] Mission data format and interpreter with tests
 - [x] Event feed from the world
-- [ ] Comms, briefing and log UI (comms and briefing done; log to do)
-- [ ] Mission type templates (assault, recon, defend done; salvage run, escort, duel to do)
+- [x] Comms, briefing and log UI
+- [x] Mission type templates (all six done)
 - [x] Slice mission converted
-- [ ] Campaign missions built: 3 of 6
-- [ ] Generated contracts
+- [x] Patron choice at the midpoint
+- [x] Campaign missions built: 6 of 6
+- [x] Generated contracts
 - [x] Mission data validation test
 - [ ] User playthrough and sign-off

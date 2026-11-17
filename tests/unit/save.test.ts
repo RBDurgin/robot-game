@@ -90,17 +90,17 @@ describe("parseSave", () => {
 
   it("carries the built-in first mission over from a version 3 save", () => {
     // Before missions were data, the one mission was over once the first outpost was cleared.
-    expect(parseSave({ version: 3, cleared: ["kestrel-outpost"] }).missions).toEqual({ done: ["first-outpost"], active: null });
-    expect(parseSave({ version: 3, cleared: ["pan-relay"] }).missions).toEqual({ done: [], active: null });
-    expect(parseSave({ scrap: 4 }).missions).toEqual({ done: [], active: null });
+    expect(parseSave({ version: 3, cleared: ["kestrel-outpost"] }).missions).toEqual({ done: ["first-outpost"], active: null, patron: null, contract: null });
+    expect(parseSave({ version: 3, cleared: ["pan-relay"] }).missions).toEqual({ done: [], active: null, patron: null, contract: null });
+    expect(parseSave({ scrap: 4 }).missions).toEqual({ done: [], active: null, patron: null, contract: null });
   });
 
   it("keeps a mission in progress, and drops one it cannot make sense of", () => {
     const active = { id: "first-outpost", stage: "return", goals: [0], fails: [], time: 31, status: "active" };
-    expect(parseSave({ version: 4, missions: { done: [], active } }).missions).toEqual({ done: [], active });
-    expect(parseSave({ version: 4, missions: { done: ["first-outpost", "no-such-mission", 7], active } }).missions).toEqual({ done: ["first-outpost"], active: null });
-    expect(parseSave({ version: 4, missions: { done: [], active: { ...active, stage: "gone" } } }).missions).toEqual({ done: [], active: null });
-    expect(parseSave({ version: 4, missions: "junk" }).missions).toEqual({ done: [], active: null });
+    expect(parseSave({ version: 4, missions: { done: [], active } }).missions).toEqual({ done: [], active, patron: null, contract: null });
+    expect(parseSave({ version: 4, missions: { done: ["first-outpost", "no-such-mission", 7], active } }).missions).toEqual({ done: ["first-outpost"], active: null, patron: null, contract: null });
+    expect(parseSave({ version: 4, missions: { done: [], active: { ...active, stage: "gone" } } }).missions).toEqual({ done: [], active: null, patron: null, contract: null });
+    expect(parseSave({ version: 4, missions: "junk" }).missions).toEqual({ done: [], active: null, patron: null, contract: null });
   });
 
   it("never leaves the player without a weapon", () => {

@@ -113,6 +113,12 @@ export interface AiView {
   follow?: Vec3 | null;
   patrol: Vec3[];
   home: Vec3;
+  /** Never fights: keeps to its route whatever is shooting at it. */
+  passive?: boolean;
+  /** The patrol is a route walked once, at full pace: the pilot stops at its last point. */
+  oneWay?: boolean;
+  /** Stand still for now (a suit under escort whose escort has fallen behind). */
+  hold?: boolean;
 }
 
 /** Wingmen stop this close to their leader, and sprint to catch up beyond the second distance. */
@@ -162,7 +168,7 @@ function aimAt(intent: Intent, eye: Vec3, point: Vec3, jitterYaw = 0, jitterPitc
  */
 export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rng: () => number, currentYaw: number): Intent {
   const intent = idleIntent(currentYaw);
-  const target = view.target;
+  const target = view.passive ? null : view.target;
   const targetDist = target ? Math.hypot(target.center.x - view.eye.x, target.center.y - view.eye.y, target.center.z - view.eye.z) : Infinity;
 
   // --- Mode transitions ---
@@ -218,12 +224,15 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
     intent.sprint = gap > FOLLOW_FAR;
     trackStuck(ai, view, intent.moveZ !== 0, dt);
   } else if (ai.mode === "patrol" || !target) {
-    const goal = view.patrol[ai.patrolIndex % Math.max(1, view.patrol.length)] ?? view.home;
-    if (distanceXZ(view.feet, goal) < 7) ai.patrolIndex = (ai.patrolIndex + 1) % Math.max(1, view.patrol.length);
+    const count = Math.max(1, view.patrol.length);
+    // A route ends; a patrol comes round again.
+    const arrived = view.oneWay === true && ai.patrolIndex >= count;
+    const goal = view.patrol[arrived ? count - 1 : ai.patrolIndex % count] ?? view.home;
+    if (!arrived && distanceXZ(view.feet, goal) < 7) ai.patrolIndex = view.oneWay ? ai.patrolIndex + 1 : (ai.patrolIndex + 1) % count;
     aimAt(intent, view.eye, { x: goal.x, y: view.eye.y, z: goal.z });
     intent.aimPoint = null;
-    intent.moveZ = 0.6;
-    trackStuck(ai, view, true, dt);
+    intent.moveZ = arrived || view.hold ? 0 : view.oneWay ? 1 : 0.6;
+    trackStuck(ai, view, intent.moveZ !== 0, dt);
   } else {
     // Refresh aim error a few times a second so shots scatter around the target.
     ai.jitterTimer -= dt;

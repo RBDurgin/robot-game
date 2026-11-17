@@ -175,6 +175,11 @@ describe("mission squads", () => {
     // With no distance, the squad is already on its loop round the place.
     const team = missionRecords(model, { tag: "team", faction: "combine", members: ["line", "marksman"], at: at.id }, at, "mission:test:1", ids);
     for (const r of team) expect(Math.hypot(r.x - at.x, r.z - at.z)).toBeLessThan(30);
-    expect(team[0]!.mission).toEqual({ tag: "team", stance: undefined, alert: false });
+    expect(team[0]!.mission).toEqual({ tag: "team", stance: undefined, alert: false, route: false, passive: false, waitFor: undefined, tough: 1, name: undefined, deadly: undefined });
+    // With a route, the squad starts at the place and its patrol is the route, from the beginning.
+    const far = { x: at.x + 900, z: at.z };
+    const [walker] = missionRecords(model, { tag: "walker", faction: "wardens", members: ["scout"], at: at.id, route: ["x"], passive: true, waitFor: 100, tough: 2 }, at, "mission:test:1", ids, [far]);
+    expect(walker).toMatchObject({ x: at.x, z: at.z, patrolIndex: 0, mission: { route: true, passive: true, waitFor: 100, tough: 2 } });
+    expect(walker!.patrol).toEqual([{ x: far.x, y: heightAt(model, far.x, far.z), z: far.z }]);
   });
 });

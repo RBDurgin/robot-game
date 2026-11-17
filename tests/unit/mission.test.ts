@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FACTIONS } from "../../src/data/factions";
-import { MISSIONS } from "../../src/data/missions";
+import { campaign, MISSIONS } from "../../src/data/missions";
+import { PATRON_OFFER, PATRONS } from "../../src/data/patrons";
 import { WORLD } from "../../src/data/world";
 import {
   awaitedSites,
@@ -13,6 +14,7 @@ import {
   resumeMission,
   startMission,
   stepMission,
+  type Action,
   type MissionDef,
   type MissionFacts,
   type StageDef,
@@ -20,11 +22,14 @@ import {
 import { buildWorldModel } from "../../src/sim/worldgen";
 
 /** A world the tests can rearrange: where the player is and who is left where. */
-function world(at: string[] = [], defenders: Record<string, number> = {}): MissionFacts & { at: string[]; defenders: Record<string, number> } {
+function world(at: string[] = [], defenders: Record<string, number> = {}): MissionFacts & { at: string[]; defenders: Record<string, number>; squads: Record<string, string> } {
   const w = {
     at,
     defenders,
-    inArea: (place: string) => w.at.includes(place),
+    /** Where each squad is, by tag. */
+    squads: {} as Record<string, string>,
+    squadIn: (tag: string, place: string) => w.squads[tag] === place,
+    inArea: (place: string, radius?: number) => w.at.includes(radius === undefined ? place : `${place}@${radius}`),
     defendersAt: (site: string) => w.defenders[site] ?? 0,
   };
   return w;
@@ -248,6 +253,72 @@ describe("mission data", () => {
   it("has no problems", () => {
     expect(missionProblems(MISSIONS, refs)).toEqual([]);
     expect(MISSIONS.length).toBeGreaterThan(0);
+  });
+
+  it("has no problems whichever patron the player takes", () => {
+    for (const patron of PATRONS) {
+      const missions = campaign(patron.faction);
+      expect(missionProblems(missions, refs)).toEqual([]);
+      // The patron's missions follow the shared ones, and none can be reached without a patron.
+      expect(missions.slice(0, MISSIONS.length)).toEqual(MISSIONS);
+      expect(refs.factions.has(patron.faction)).toBe(true);
+      // Six missions, one of each type, ending in a part handed over.
+      expect(missions.map((m) => m.type).sort()).toEqual(["assault", "defend", "duel", "escort", "recon", "salvage"]);
+      expect(missions.at(-1)!.reward.items).toHaveLength(1);
+    }
+    expect(campaign(null)).toEqual(MISSIONS);
+    expect(MISSIONS.at(-1)!.id).toBe(PATRON_OFFER.after);
+  });
+
+  it("is checked: a part given as a reward must be a real one", () => {
+    const def = mission([{ id: "a", objective: "", goals: [{ when: "elapsed", seconds: 1 }] }], { reward: { scrap: 0, items: [{ id: "lanceBeam", tier: 3, mods: ["rapid"] }] } });
+    expect(missionProblems([def], refs)).toEqual(['test: rewards a part that is not valid: {"id":"lanceBeam","tier":3,"mods":["rapid"]}']);
+  });
+
+  it("is checked: pickups must lie somewhere real and be the ones goals wait for", () => {
+    const def = mission([
+      { id: "a", objective: "", enter: [{ do: "drop", tag: "key", name: "Key", at: "nowhere" }, { do: "drop", tag: "key", name: "Key", at: "post" }], goals: [{ when: "collected", tag: "kee", count: 1 }] },
+    ]);
+    expect(missionProblems([def], { sites: new Set(["post"]), factions: new Set() })).toEqual([
+      'test: pickup "key" lies at unknown place "nowhere"',
+      'test: pickup tag "key" is used twice',
+      'test: stage "a": no pickup is tagged "kee"',
+    ]);
+  });
+
+  it("waits for a squad to arrive somewhere, and can fail if it is destroyed on the way", () => {
+    const engineer: Action = { do: "spawn", tag: "engineer", faction: "wardens", members: ["scout"], at: "start", route: ["mid", "end"], keep: true };
+    const def = mission([
+      { id: "a", objective: "", enter: [engineer], goals: [{ when: "arrived", tag: "engineer", place: "mid" }], fail: [{ when: "destroyed", tag: "engineer", count: 1 }] },
+      { id: "b", objective: "", enter: [{ ...engineer, at: "mid", route: ["end"] }], goals: [{ when: "arrived", tag: "engineer", place: "end" }], fail: [{ when: "destroyed", tag: "engineer", count: 1 }] },
+    ]);
+    expect(missionProblems([def], { sites: new Set(["start", "mid", "end"]), factions: new Set(["wardens"]) })).toEqual([]);
+    const w = world();
+    const { state } = startMission(def);
+    expect(stepMission(def, state, 1, w)).toEqual([]);
+    w.squads.engineer = "mid";
+    expect(stepMission(def, state, 1, w)[0]).toEqual({ do: "stage", stage: "b" });
+    missionEvent(def, state, kill({ faction: "wardens", tag: "engineer", byPlayer: false }));
+    expect(stepMission(def, state, 1, w)).toEqual([{ do: "fail" }]);
+
+    // A squad named in two stages must be kept in both, and its route and goal must be real.
+    const bad = mission([
+      { id: "a", objective: "", enter: [{ ...engineer, route: ["nowhere"] }], goals: [{ when: "arrived", tag: "engineer", place: "mid" }] },
+      { id: "b", objective: "", enter: [{ ...engineer, keep: false }], goals: [{ when: "arrived", tag: "enginer", place: "moon" }] },
+    ]);
+    expect(missionProblems([bad], { sites: new Set(["start", "mid", "end"]), factions: new Set(["wardens"]) })).toEqual([
+      'test: squad "engineer" has unknown place "nowhere" on its route',
+      'test: squad tag "engineer" is used twice',
+      'test: stage "b": no squad is tagged "enginer"',
+      'test: stage "b": unknown place "moon"',
+    ]);
+  });
+
+  it("shows the time left on a stage with a limit", () => {
+    const def = mission([{ id: "a", objective: "Run: {time}s", goals: [{ when: "inArea", place: "x" }], fail: [{ when: "playerDestroyed" }, { when: "elapsed", seconds: 20 }] }]);
+    const { state } = startMission(def);
+    stepMission(def, state, 4.5, world());
+    expect(objectiveText(def, state, world())).toBe("Run: 16s");
   });
 
   it("begins with a mission that starts by itself against the first outpost", () => {
