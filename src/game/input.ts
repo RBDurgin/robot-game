@@ -1,3 +1,4 @@
+import { PAD_BUTTON, PAD_FEEL, PAD_HELD, PAD_PRESS, type PadButton } from "../data/gamepad";
 import type { Intent } from "../sim/intent";
 import { clamp, wrapAngle, type Vec3 } from "../sim/math";
 
@@ -9,6 +10,10 @@ const MAX_LOOK_PITCH = 1.25;
  *   WASD move · Shift sprint · Space jump / jump jets · Q boost dash
  *   Left mouse primary · Right mouse secondary · E or middle mouse shoulder weapons
  *   F melee · V switch view
+ *
+ * A gamepad works alongside them (layout in src/data/gamepad.ts): `pollGamepad` reads it once
+ * a frame, and its buttons either feed the same Intent or run the same key handlers. In menus
+ * it moves focus between the menu's controls instead.
  */
 export class PlayerInput {
   yaw = 0;
@@ -25,12 +30,23 @@ export class PlayerInput {
   onPointerReleased: (() => void) | null = null;
   private quietRelease = false;
   private retryTimer = 0;
+  /** True while the gamepad is the last thing the player touched. */
+  usingGamepad = false;
+  private padHeld = new Set<PadButton>();
+  private padMove = { x: 0, z: 0 };
+  private padSprint = false;
+  /** Buttons still down from a menu (A on "Resume"): ignored in play until released. */
+  private padBlocked = new Set<PadButton>();
+  /** Menu navigation: the direction held and time until it repeats. */
+  private menuDir = "";
+  private menuRepeat = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
       // Also for auto-repeat: a held Space must not scroll or re-press a focused button.
       if (e.code === "Space" || e.code === "Tab") e.preventDefault();
       if (e.repeat) return;
+      this.usingGamepad = false;
       this.keys.add(e.code);
       this.pressHandlers.get(e.code)?.();
     });
@@ -53,6 +69,7 @@ export class PlayerInput {
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("mousemove", (e) => {
       if (!this.pointerLocked || !this.enabled) return;
+      if (e.movementX !== 0 || e.movementY !== 0) this.usingGamepad = false;
       this.yaw = wrapAngle(this.yaw + e.movementX * this.sensitivity);
       this.pitch = clamp(this.pitch - e.movementY * this.sensitivity, -MAX_LOOK_PITCH, MAX_LOOK_PITCH);
     });
@@ -89,7 +106,7 @@ export class PlayerInput {
 
   /** True when the game is in play but the mouse is not captured, so looking around is dead. */
   get needsPointer(): boolean {
-    return this.enabled && !this.pointerLocked && !navigator.webdriver;
+    return this.enabled && !this.pointerLocked && !navigator.webdriver && !this.usingGamepad;
   }
 
   /** Free the mouse. `quiet` skips the released callback (dev panel: free the mouse, keep playing). */
@@ -110,19 +127,113 @@ export class PlayerInput {
 
   buildIntent(aimPoint: Vec3 | null): Intent {
     const on = this.enabled;
+    const pad = (action: keyof typeof PAD_HELD): boolean => on && this.padHeld.has(PAD_HELD[action]);
     return {
-      moveX: on ? this.axis("KeyA", "KeyD") : 0,
-      moveZ: on ? this.axis("KeyS", "KeyW") : 0,
+      moveX: on ? clamp(this.axis("KeyA", "KeyD") + this.padMove.x, -1, 1) : 0,
+      moveZ: on ? clamp(this.axis("KeyS", "KeyW") + this.padMove.z, -1, 1) : 0,
       aimYaw: this.yaw,
       aimPitch: this.pitch,
       aimPoint,
-      sprint: on && (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight")),
-      boost: on && this.keys.has("KeyQ"),
-      jump: on && this.keys.has("Space"),
-      firePrimary: on && this.buttons.has(0),
-      fireSecondary: on && this.buttons.has(2),
-      fireTertiary: on && (this.buttons.has(1) || this.keys.has("KeyE")),
-      melee: on && this.keys.has("KeyF"),
+      sprint: on && (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprint),
+      boost: (on && this.keys.has("KeyQ")) || pad("boost"),
+      jump: (on && this.keys.has("Space")) || pad("jump"),
+      firePrimary: (on && this.buttons.has(0)) || pad("firePrimary"),
+      fireSecondary: (on && this.buttons.has(2)) || pad("fireSecondary"),
+      fireTertiary: (on && (this.buttons.has(1) || this.keys.has("KeyE"))) || pad("fireTertiary"),
+      melee: (on && this.keys.has("KeyF")) || pad("melee"),
     };
+  }
+
+  /** Read the first connected gamepad. Call once per rendered frame, menus included. */
+  pollGamepad(dt: number, pads: readonly (Gamepad | null)[] = navigator.getGamepads?.() ?? []): void {
+    const pad = pads.find((p): p is Gamepad => !!p && p.connected && p.mapping === "standard");
+    if (!pad) {
+      this.padHeld.clear();
+      this.padMove = { x: 0, z: 0 };
+      this.padSprint = false;
+      return;
+    }
+    const held = new Set<PadButton>();
+    for (const [name, index] of Object.entries(PAD_BUTTON) as [PadButton, number][]) {
+      const b = pad.buttons[index];
+      if (!b) continue;
+      if (name === "lt" || name === "rt" ? b.value > PAD_FEEL.triggerThreshold : b.pressed) held.add(name);
+    }
+    const dz = (v = 0): number => (Math.abs(v) < PAD_FEEL.deadzone ? 0 : (Math.sign(v) * (Math.abs(v) - PAD_FEEL.deadzone)) / (1 - PAD_FEEL.deadzone));
+    const [lx, ly, rx, ry] = [dz(pad.axes[0]), dz(pad.axes[1]), dz(pad.axes[2]), dz(pad.axes[3])];
+    if (held.size > 0 || lx || ly || rx || ry) this.usingGamepad = true;
+    const before = this.padHeld;
+    const pressed = (b: PadButton): boolean => held.has(b) && !before.has(b);
+
+    if (this.enabled) {
+      for (const b of this.padBlocked) if (!held.has(b)) this.padBlocked.delete(b);
+      for (const b of this.padBlocked) held.delete(b);
+      this.padHeld = held;
+      this.padMove = { x: lx, z: -ly };
+      const curve = (v: number): number => Math.sign(v) * Math.abs(v) ** PAD_FEEL.lookCurve;
+      this.yaw = wrapAngle(this.yaw + curve(rx) * PAD_FEEL.lookYawSpeed * dt);
+      this.pitch = clamp(this.pitch - curve(ry) * PAD_FEEL.lookPitchSpeed * dt, -MAX_LOOK_PITCH, MAX_LOOK_PITCH);
+      // Click the stick to sprint; letting go of it ends the sprint.
+      if (pressed("l3")) this.padSprint = !this.padSprint;
+      if (lx === 0 && ly === 0) this.padSprint = false;
+      for (const [button, code] of Object.entries(PAD_PRESS) as [PadButton, string][]) {
+        if (pressed(button)) this.pressHandlers.get(code)?.();
+      }
+      return;
+    }
+    this.padHeld = held;
+    this.padBlocked = new Set(held);
+    this.padMove = { x: 0, z: 0 };
+    this.padSprint = false;
+    const dir = held.has("up") || ly < -0.5 ? "up" : held.has("down") || ly > 0.5 ? "down" : held.has("left") || lx < -0.5 ? "left" : held.has("right") || lx > 0.5 ? "right" : "";
+    this.menuInput(dir, dt, pressed);
+  }
+
+  /** Gamepad in a menu: move between its controls, change values, choose and go back. */
+  private menuInput(dir: string, dt: number, pressed: (b: PadButton) => boolean): void {
+    const root = document.getElementById("overlay");
+    if (!root || root.hidden) return;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, select, input, [tabindex]")].filter(
+      (e) => !(e as HTMLButtonElement).disabled && !e.hidden && e.offsetParent !== null && e.tabIndex >= 0,
+    );
+    const focused = document.activeElement instanceof HTMLElement && controls.includes(document.activeElement) ? document.activeElement : null;
+
+    let step = false;
+    if (dir !== this.menuDir) {
+      this.menuDir = dir;
+      this.menuRepeat = PAD_FEEL.menuRepeatDelay;
+      step = dir !== "";
+    } else if (dir) {
+      this.menuRepeat -= dt;
+      if (this.menuRepeat <= 0) {
+        this.menuRepeat = PAD_FEEL.menuRepeatInterval;
+        step = true;
+      }
+    }
+    if (step && controls.length > 0) {
+      const sideways = dir === "left" || dir === "right";
+      const delta = dir === "up" || dir === "left" ? -1 : 1;
+      if (sideways && focused instanceof HTMLInputElement && focused.type === "range") {
+        if (delta > 0) focused.stepUp();
+        else focused.stepDown();
+        focused.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (sideways && focused instanceof HTMLSelectElement) {
+        const next = focused.selectedIndex + delta;
+        if (next >= 0 && next < focused.options.length && !focused.options[next]!.disabled) {
+          focused.selectedIndex = next;
+          focused.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else {
+        const at = focused ? controls.indexOf(focused) : delta > 0 ? -1 : 0;
+        const target = controls[(at + delta + controls.length) % controls.length]!;
+        target.focus();
+        target.scrollIntoView({ block: "nearest" });
+      }
+    }
+    if (pressed("a") && focused) focused.click();
+    const backButton = root.querySelector<HTMLButtonElement>("button[data-back]");
+    if (pressed("b") && backButton) backButton.click();
+    // Start leaves a menu the same way (resume, close), or takes the main choice if there is no way back.
+    if (pressed("start")) (backButton ?? root.querySelector<HTMLButtonElement>("button.primary:not([disabled])"))?.click();
   }
 }

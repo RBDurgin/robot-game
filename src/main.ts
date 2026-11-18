@@ -3,6 +3,7 @@ import { FixedStepClock, SIM_DT } from "./sim/clock";
 import { FrameStats } from "./game/frameStats";
 import { PROFILING, perfEnd, perfFrame, perfFrameCount, perfStart, perfTake } from "./game/perf";
 import { World } from "./game/world";
+import { modelsEnabled } from "./view/parts/GltfPartVisual";
 import { buildTweakPanel } from "./view/tweakPanel";
 
 /** Debug handle used by the e2e tests and for poking at the game from the browser console. */
@@ -49,6 +50,9 @@ async function boot(): Promise<void> {
         height: engine.getRenderHeight(),
         devicePixelRatio: window.devicePixelRatio,
         gpuTimer: engine.getCaps().timerQuery !== undefined,
+        // What was being drawn: the graphics preset, and imported models or procedural parts.
+        quality: world.save.settings.quality,
+        models: modelsEnabled,
       },
       frames: perfTake(),
     });
@@ -115,6 +119,7 @@ async function boot(): Promise<void> {
               enemies: world.enemies.length,
               fighting: world.enemies.filter((m) => m.brain?.state.mode !== "patrol").length,
               effects: world.effects.activeCount,
+              particles: world.effects.particles.activeCount,
               // Streaming: what is loaded, what is waiting, and how many jobs ran this frame.
               chunks: world.terrain.stats.chunks,
               queued: world.terrain.stats.queued,

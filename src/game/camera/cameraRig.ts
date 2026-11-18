@@ -17,6 +17,12 @@ const AIM_RANGE = 600;
 export class CameraRig {
   readonly camera: FreeCamera;
   mode: ViewMode = "third";
+  /**
+   * Debug only: look at the player from a fixed angle (yaw around them, in radians from their
+   * front; distance and height in metres) instead of following the aim. For screenshots of
+   * models and lighting; set from the console or a test, null to go back to normal.
+   */
+  showcase: { yaw: number; distance: number; height: number } | null = null;
   /** How far along the view ray the aim trace starts, so it begins beyond the player's own mech. */
   private aimStart = THIRD.distance;
   private shakeAmount = 0;
@@ -48,6 +54,17 @@ export class CameraRig {
     const f = forwardFromYawPitch(yaw, pitch);
     const forward = new Vector3(f.x, f.y, f.z);
 
+    if (this.showcase) {
+      target.visual.setVisible(true);
+      const s = this.showcase;
+      const look = target.renderPosition.add(new Vector3(0, target.frame.height * 0.55, 0));
+      const a = target.state.legsYaw + s.yaw;
+      this.camera.position.set(look.x + Math.sin(a) * s.distance, look.y + s.height, look.z + Math.cos(a) * s.distance);
+      this.camera.setTarget(look);
+      this.camera.fov = 0.8;
+      this.steady.copyFrom(this.camera.position);
+      return;
+    }
     if (this.mode === "cockpit") {
       target.visual.setVisible(false);
       // Eye sits at pilot height on the mech's axis, pushed forward along the view.

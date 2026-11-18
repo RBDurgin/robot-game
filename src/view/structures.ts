@@ -1,6 +1,7 @@
 import { Color3, Color4, Mesh, MeshBuilder, PhysicsAggregate, PhysicsShapeType, Scene, StandardMaterial } from "@babylonjs/core";
 import { SITE_MATERIALS, siteBlocks, type SiteMaterial } from "../data/siteLayouts";
 import { addStaticCollider } from "../game/physics";
+import { castsShadow } from "./graphics";
 import type { ScatterItem } from "../sim/chunks";
 import type { Site } from "../sim/terrain";
 
@@ -44,6 +45,8 @@ export function buildSite(scene: Scene, site: Site, materials: StructureMaterial
     mesh.rotation.z = spec.tilt ?? 0;
     mesh.material = materials.site(spec.material);
     mesh.isPickable = false;
+    mesh.receiveShadows = true;
+    castsShadow(mesh);
     mesh.computeWorldMatrix(true);
     const collider = addStaticCollider(scene, mesh, PhysicsShapeType.BOX);
     mesh.freezeWorldMatrix();
@@ -77,6 +80,8 @@ export function buildScatter(scene: Scene, name: string, items: ScatterItem[], m
   mesh.name = name;
   mesh.material = materials.vertexColored;
   mesh.isPickable = false;
+  mesh.receiveShadows = true;
+  castsShadow(mesh);
   const collider = addStaticCollider(scene, mesh, PhysicsShapeType.MESH);
   mesh.freezeWorldMatrix();
   return {

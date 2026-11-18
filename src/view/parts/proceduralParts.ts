@@ -1,6 +1,7 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import type { ColorScheme } from "../../data/factions";
 import type { FrameLook } from "../../data/frames";
+import { surfaceTextures } from "../surface";
 import type { AttachmentName, PartPose, PartVisual } from "./PartVisual";
 
 export interface PartMaterials {
@@ -8,19 +9,37 @@ export interface PartMaterials {
   secondary: StandardMaterial;
   accent: StandardMaterial;
   metal: StandardMaterial;
+  /** Joints, grilles and recesses. */
+  dark: StandardMaterial;
   flame: StandardMaterial;
 }
 
-function flatMaterial(scene: Scene, name: string, hex: number, emissive = 0): StandardMaterial {
+/** How each kind of surface catches the light: painted armour is satin, bare metal is sharp. */
+const FINISH = {
+  paint: { specular: 0.22, power: 28 },
+  metal: { specular: 0.55, power: 64 },
+  dark: { specular: 0.3, power: 40 },
+};
+
+function partMaterial(scene: Scene, name: string, hex: number, finish: keyof typeof FINISH | null, emissive = 0): StandardMaterial {
   const mat = new StandardMaterial(name, scene);
   const color = Color3.FromHexString(`#${hex.toString(16).padStart(6, "0")}`);
   mat.diffuseColor = color;
-  mat.specularColor = new Color3(0.12, 0.12, 0.12);
+  if (finish) {
+    const f = FINISH[finish];
+    mat.specularColor = new Color3(f.specular, f.specular, f.specular);
+    mat.specularPower = f.power;
+    mat.diffuseTexture = surfaceTextures(scene).albedo;
+  } else {
+    mat.specularColor = new Color3(0.12, 0.12, 0.12);
+  }
   if (emissive > 0) mat.emissiveColor = color.scale(emissive);
   return mat;
 }
 
 const materialCache = new WeakMap<Scene, Map<string, PartMaterials>>();
+/** Whether part materials carry the panel normal map (a graphics quality setting). */
+const surfaceDetail = new WeakMap<Scene, boolean>();
 
 /** Materials are shared between every mech that uses the same colour scheme. */
 export function getPartMaterials(scene: Scene, colors: ColorScheme): PartMaterials {
@@ -33,17 +52,58 @@ export function getPartMaterials(scene: Scene, colors: ColorScheme): PartMateria
   let mats = perScene.get(key);
   if (!mats) {
     mats = {
-      primary: flatMaterial(scene, `primary-${key}`, colors.primary),
-      secondary: flatMaterial(scene, `secondary-${key}`, colors.secondary),
-      accent: flatMaterial(scene, `accent-${key}`, colors.accent, 0.9),
-      metal: flatMaterial(scene, `metal-${key}`, 0x6b7078),
-      flame: flatMaterial(scene, `flame-${key}`, 0xffb347, 1),
+      primary: partMaterial(scene, `primary-${key}`, colors.primary, "paint"),
+      secondary: partMaterial(scene, `secondary-${key}`, colors.secondary, "paint"),
+      accent: partMaterial(scene, `accent-${key}`, colors.accent, null, 0.9),
+      metal: partMaterial(scene, `metal-${key}`, 0x6b7078, "metal"),
+      dark: partMaterial(scene, `dark-${key}`, 0x1c1d20, "dark"),
+      flame: partMaterial(scene, `flame-${key}`, 0xffb347, null, 1),
     };
     mats.flame.disableLighting = true;
     mats.flame.alpha = 0.85;
+    applySurfaceDetail(scene, mats, surfaceDetail.get(scene) ?? true);
     perScene.set(key, mats);
   }
   return mats;
+}
+
+function applySurfaceDetail(scene: Scene, mats: PartMaterials, on: boolean): void {
+  const normal = on ? surfaceTextures(scene).normal : null;
+  for (const mat of [mats.primary, mats.secondary, mats.metal, mats.dark]) mat.bumpTexture = normal;
+}
+
+/**
+ * White materials for model parts that carry their colour per vertex: painted armour and bare
+ * metal. Shared by every faction, so a new faction in view needs no new shaders.
+ */
+export interface PaletteMaterials {
+  paint: StandardMaterial;
+  bare: StandardMaterial;
+}
+
+const paletteCache = new WeakMap<Scene, PaletteMaterials>();
+
+export function getPaletteMaterials(scene: Scene): PaletteMaterials {
+  let palette = paletteCache.get(scene);
+  if (!palette) {
+    palette = { paint: partMaterial(scene, "palette-paint", 0xffffff, "paint"), bare: partMaterial(scene, "palette-bare", 0xffffff, "metal") };
+    applyPaletteDetail(scene, palette, surfaceDetail.get(scene) ?? true);
+    paletteCache.set(scene, palette);
+  }
+  return palette;
+}
+
+function applyPaletteDetail(scene: Scene, palette: PaletteMaterials, on: boolean): void {
+  const normal = on ? surfaceTextures(scene).normal : null;
+  palette.paint.bumpTexture = palette.bare.bumpTexture = normal;
+}
+
+/** Turn the panel normal map on every mech material on or off. */
+export function setSurfaceDetail(scene: Scene, on: boolean): void {
+  surfaceDetail.set(scene, on);
+  for (const mats of materialCache.get(scene)?.values() ?? []) applySurfaceDetail(scene, mats, on);
+  const palette = paletteCache.get(scene);
+  if (palette) applyPaletteDetail(scene, palette, on);
 }
 
 /** Base class: a root node, named attachment points, and helpers to build from primitives. */
@@ -139,10 +199,10 @@ export class ProceduralLegs extends ProceduralPartVisual {
     this.attach("hip", this.pelvis, 0, 0.4, 0);
 
     const build = (side: -1 | 1): [TransformNode, TransformNode] => {
-      const hip = this.node(`hip${side}`, this.pelvis, side * 0.62 * b, 0, 0);
+      const hip = this.node(side < 0 ? "hip_l" : "hip_r", this.pelvis, side * 0.62 * b, 0, 0);
       this.box("thigh", hip, [0.55 * b, seg, 0.7 * b], [0, -seg / 2, 0], mats.primary);
       this.box("thighPlate", hip, [0.2 * b, seg * 0.7, 0.8 * b], [side * 0.32 * b, -seg * 0.45, 0], mats.secondary);
-      const knee = this.node("knee", hip, 0, -seg, 0);
+      const knee = this.node(side < 0 ? "knee_l" : "knee_r", hip, 0, -seg, 0);
       this.box("kneeCap", knee, [0.6 * b, 0.35, 0.5 * b], [0, 0, 0.3 * b], mats.metal);
       this.box("shin", knee, [0.45 * b, seg - 0.2, 0.55 * b], [0, -(seg - 0.2) / 2, 0], mats.secondary);
       this.box("foot", knee, [0.7 * b, 0.28, 1.2 * b], [0, -seg + 0.14, 0.2 * b], mats.primary);
@@ -283,7 +343,8 @@ export class ProceduralBackpack extends ProceduralPartVisual {
   }
 }
 
-export type WeaponShape = "rifle" | "launcher" | "emitter" | "scatter";
+import type { WeaponShape } from "../../data/models";
+export type { WeaponShape };
 
 /** Weapon model held in the hand. Origin is at the grip; barrel points along +Z. */
 export class ProceduralWeapon extends ProceduralPartVisual {

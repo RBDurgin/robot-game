@@ -11,12 +11,14 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "check": "npm run typecheck && npm test && npm run e2e",
-    "trace": "node scripts/analyze-trace.mjs"
+    "trace": "node scripts/analyze-trace.mjs",
+    "models": "node scripts/make-models.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^9.36.0",
     "@babylonjs/gui": "^9.36.0",
-    "@babylonjs/havok": "^1.3.14"
+    "@babylonjs/havok": "^1.3.14",
+    "@babylonjs/loaders": "^9.36.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",

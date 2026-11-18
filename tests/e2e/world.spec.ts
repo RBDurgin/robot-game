@@ -96,7 +96,8 @@ test("open world: terrain streams in and out across biomes, and the edge is wall
   const end = await worldState(page);
   expect(most).toBeLessThanOrEqual(121);
   expect(end.stream.chunks).toBeLessThanOrEqual(121);
-  expect(end.materials).toBeLessThanOrEqual(start.materials + 12);
+  // New materials only come with each new faction met: six part materials per colour scheme.
+  expect(end.materials).toBeLessThanOrEqual(start.materials + 18);
   expect(end.meshes).toBeLessThan(start.meshes * 2 + 200);
   expect(end.bodies).toBeLessThan(start.bodies * 2 + 100);
 
