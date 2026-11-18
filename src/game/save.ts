@@ -1,3 +1,4 @@
+import { DEFAULT_QUALITY, isQualityLevel, type QualityLevel } from "../data/quality";
 import { FRAMES, HARDPOINT_IDS, isFrameId, type FrameId } from "../data/frames";
 import { STARTING_LOADOUT, type Loadout } from "../data/loadouts";
 import { isWarFactionId, type WarFactionId } from "../data/factions";
@@ -17,6 +18,8 @@ export interface Settings {
   sensitivity: number;
   /** 0..1 master volume. */
   volume: number;
+  /** Graphics preset (src/data/quality.ts). */
+  quality: QualityLevel;
   defaultView: "third" | "cockpit";
 }
 
@@ -81,7 +84,7 @@ export interface SavedPosition {
   yaw: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { sensitivity: 0.0022, volume: 0.6, defaultView: "third" };
+export const DEFAULT_SETTINGS: Settings = { sensitivity: 0.0022, volume: 0.6, defaultView: "third", quality: DEFAULT_QUALITY };
 
 export function freshSave(): SaveData {
   const inventory: Inventory = [];
@@ -223,6 +226,8 @@ export function parseSave(raw: unknown): SaveData {
     if (typeof s.sensitivity === "number") save.settings.sensitivity = Math.min(0.006, Math.max(0.0005, s.sensitivity));
     if (typeof s.volume === "number") save.settings.volume = Math.min(1, Math.max(0, s.volume));
     if (s.defaultView === "third" || s.defaultView === "cockpit") save.settings.defaultView = s.defaultView;
+    // Saves from before phase 7 have no quality setting and take the default.
+    if (isQualityLevel(s.quality)) save.settings.quality = s.quality;
   }
   // Saves from before the open world have none of these: the player starts at home with
   // nothing found. Ids are checked against the world when they are used.

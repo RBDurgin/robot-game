@@ -185,6 +185,7 @@ export function buildChunkMesh(scene: Scene, def: WorldDef, cx: number, cz: numb
   }
 
   const mesh = new Mesh(`chunk ${cx},${cz}`, scene);
+  mesh.receiveShadows = true;
   const data = new VertexData();
   data.positions = positions;
   data.indices = indices;

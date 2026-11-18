@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FRAMES } from "../../src/data/frames";
+import { DEFAULT_QUALITY } from "../../src/data/quality";
 import { freshSave, migrateSave, parseSave, SAVE_VERSION } from "../../src/game/save";
 import { addItem, fitFromLoadout, fitLoadout, fitProblems } from "../../src/sim/items";
 
@@ -20,8 +21,14 @@ describe("parseSave", () => {
     expect(save.inventory.every((item) => item.tier === 1 && item.mods.length === 0)).toBe(true);
     expect(new Set(save.inventory.map((item) => item.uid)).size).toBe(6);
     expect(save.scrap).toBe(87);
-    expect(save.settings).toEqual(old.settings);
+    // Saves from before phase 7 have no graphics setting and take the default.
+    expect(save.settings).toEqual({ ...old.settings, quality: DEFAULT_QUALITY });
     expect(fitProblems(FRAMES[save.frame], save.fit, save.inventory)).toEqual([]);
+  });
+
+  it("keeps a valid graphics quality and replaces a bad one", () => {
+    expect(parseSave({ ...freshSave(), settings: { ...freshSave().settings, quality: "high" } }).settings.quality).toBe("high");
+    expect(parseSave({ ...freshSave(), settings: { ...freshSave().settings, quality: "ultra" } }).settings.quality).toBe(DEFAULT_QUALITY);
   });
 
   it("round-trips the current format", () => {

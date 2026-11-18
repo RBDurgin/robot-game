@@ -2,6 +2,8 @@ import { FRAME_IDS, FRAMES, type FrameDef, type FrameId, type Trigger } from "..
 import { MODS } from "../data/mods";
 import type { WeaponDef } from "../data/weapons";
 import type { Settings } from "../game/save";
+import { isQualityLevel, QUALITY } from "../data/quality";
+import { PAD_CONTROLS } from "../data/gamepad";
 import type { SlotInfo } from "../game/saveStore";
 import type { WorldModel } from "../sim/terrain";
 import { drawMap, type MapSite, type MapTerritory } from "./mapView";
@@ -25,6 +27,12 @@ function button(label: string, onClick: () => void, className = "primary"): HTML
   const b = el("button", className, [label]);
   b.type = "button";
   b.addEventListener("click", onClick);
+  return b;
+}
+
+/** Mark the button that leaves a screen without choosing anything; a gamepad's B presses it. */
+function back(b: HTMLButtonElement): HTMLButtonElement {
+  b.dataset.back = "";
   return b;
 }
 
@@ -254,8 +262,22 @@ export class Screens {
       opts.onSettings({ ...settings });
     });
 
+    const quality = el("select");
+    for (const [value, def] of Object.entries(QUALITY)) {
+      const o = el("option", "", [def.label]);
+      o.value = value;
+      o.selected = settings.quality === value;
+      quality.append(o);
+    }
+    quality.addEventListener("change", () => {
+      if (isQualityLevel(quality.value)) settings.quality = quality.value;
+      opts.onSettings({ ...settings });
+    });
+
     const controls = el("dl", "controls");
     for (const [key, action] of CONTROLS) controls.append(el("dt", "", [key]), el("dd", "", [action]));
+    const padControls = el("dl", "controls");
+    for (const [key, action] of PAD_CONTROLS) padControls.append(el("dt", "", [key]), el("dd", "", [action]));
 
     // The slots are read from storage, so the list fills in a moment after the screen opens.
     const slotList = el("ul", "slots");
@@ -303,10 +325,13 @@ export class Screens {
         : []),
       el("h2", "", ["Controls"]),
       controls,
+      el("h2", "", ["Gamepad"]),
+      padControls,
       el("h2", "", ["Settings"]),
       range("Mouse sensitivity", 0.0006, 0.005, 0.0002, settings.sensitivity, (v) => (settings.sensitivity = v)),
       range("Volume", 0, 1, 0.05, settings.volume, (v) => (settings.volume = v)),
       el("label", "row", [el("span", "", ["Starting view"]), view]),
+      el("label", "row", [el("span", "", ["Graphics"]), quality]),
       el("h2", "", ["Saved games"]),
       slotList,
       saveNote,
@@ -316,7 +341,7 @@ export class Screens {
         button("Reset this slot", opts.onReset, "secondary"),
         file,
       ]),
-      el("div", "actions", [button(opts.isStart ? "Deploy" : "Resume", opts.onResume)]),
+      el("div", "actions", [opts.isStart ? button("Deploy", opts.onResume) : back(button("Resume", opts.onResume))]),
     ]);
     this.show(panel);
   }
@@ -526,7 +551,7 @@ export class Screens {
       el("div", "travel", travel),
       el("h2", "", [`Places found · ${opts.sites.length} of ${opts.total}`]),
       el("ul", "places", known.map((s) => el("li", s.held ? "held" : s.hostile ? "hostile" : "", [`${s.site.name}${tag(s)}`]))),
-      el("div", "actions", [button("Close map", opts.onClose)]),
+      el("div", "actions", [back(button("Close map", opts.onClose))]),
     ]);
     this.show(el("div", "panel mapPanel", [el("h1", "", [opts.model.def.name]), el("div", "mapBody", [canvas, side])]));
   }
@@ -538,7 +563,7 @@ export class Screens {
         el("h2", "", [`${opts.type} mission · ${opts.from}`]),
         ...opts.text.map((line) => el("p", "", [line])),
         ...(opts.rewards.length > 0 ? [el("h2", "", ["Pays"]), el("p", "", [opts.rewards.join(", ")])] : []),
-        el("div", "actions", [button("Accept", opts.onAccept), button("Not now", opts.onLater, "secondary")]),
+        el("div", "actions", [button("Accept", opts.onAccept), back(button("Not now", opts.onLater, "secondary"))]),
       ]),
     );
   }
@@ -561,7 +586,7 @@ export class Screens {
         el("h1", "", ["The offers"]),
         el("p", "", ["Harbor asked for a crew, and everyone heard. These messages were waiting when you got in. Whoever you fly for briefs you from here on, and it cannot be undone."]),
         el("div", "offers", cards),
-        el("div", "actions", [button("Decide later", opts.onLater, "secondary")]),
+        el("div", "actions", [back(button("Decide later", opts.onLater, "secondary"))]),
       ]),
     );
   }
@@ -587,7 +612,7 @@ export class Screens {
         el("p", "", [cards.length > 0 ? "Work on offer from the factions that will deal with you. The board changes as the war does." : "Nobody who will deal with you has work at the moment. Look again later."]),
         ...(opts.busy ? [el("p", "bad", [opts.busy])] : []),
         el("div", "offers", cards),
-        el("div", "actions", [button("Close", opts.onClose, "secondary")]),
+        el("div", "actions", [back(button("Close", opts.onClose, "secondary"))]),
       ]),
     );
   }
@@ -601,7 +626,7 @@ export class Screens {
         ...(opts.patron ? [el("h2", "", ["You fly for"]), el("p", "", [opts.patron])] : []),
         el("h2", "", [`The Signal · ${opts.done.length} of ${opts.total}`]),
         ...(opts.done.length > 0 ? opts.done.flatMap((d, i) => [el("p", "", [`${i + 1}. ${d.title} (${d.type})`]), el("p", "dim", [d.text])]) : [el("p", "dim", ["Nothing finished yet."])]),
-        el("div", "actions", [button("Close", opts.onClose)]),
+        el("div", "actions", [back(button("Close", opts.onClose))]),
       ]),
     );
   }
@@ -625,7 +650,7 @@ export class Screens {
         el("h1", "", [summary.title]),
         el("p", "", [summary.text]),
         list,
-        el("div", "actions", onReplay ? [button("Play again", onReplay), button("Keep exploring", onContinue, "secondary")] : [button("Continue", onContinue)]),
+        el("div", "actions", onReplay ? [button("Play again", onReplay), back(button("Keep exploring", onContinue, "secondary"))] : [back(button("Continue", onContinue))]),
       ]),
     );
   }

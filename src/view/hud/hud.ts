@@ -3,8 +3,18 @@ import type { Scene, TransformNode } from "@babylonjs/core";
 import type { SectionId } from "../../data/frames";
 
 export const HUD_FONT = "ui-monospace, Menlo, Consolas, monospace";
-const PANEL = "#0d1014";
 const COMPASS_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+/** A dark, faintly outlined backing panel that keeps text readable over sky and sand. */
+function backing(name: string): Rectangle {
+  const r = new Rectangle(name);
+  r.background = "rgba(6,10,14,0.55)";
+  r.color = "rgba(111,227,255,0.22)";
+  r.thickness = 1;
+  r.cornerRadius = 4;
+  r.isHitTestVisible = false;
+  return r;
+}
 
 function text(name: string, size: number, color = "#e8eef5"): TextBlock {
   const t = new TextBlock(name, "");
@@ -23,31 +33,35 @@ class Bar {
     name: string,
     private readonly color: string,
     width = 220,
+    height = 18,
   ) {
     this.root = new Rectangle(`${name}Bar`);
     this.root.width = `${width}px`;
-    this.root.height = "18px";
+    this.root.height = `${height}px`;
     this.root.thickness = 1;
-    this.root.color = "#8a97a6";
-    this.root.background = "rgba(0,0,0,0.45)";
+    this.root.color = "rgba(138,151,166,0.7)";
+    this.root.background = "rgba(0,0,0,0.5)";
     this.root.paddingBottom = "4px";
 
     this.fill = new Rectangle(`${name}Fill`);
     this.fill.thickness = 0;
+    this.fill.alpha = 0.8;
     this.fill.background = color;
     this.fill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     this.root.addControl(this.fill);
 
     this.label = text(`${name}Label`, 11, "#ffffff");
+    this.label.outlineWidth = 3;
+    this.label.outlineColor = "#05090c";
     this.label.text = name.toUpperCase();
     this.label.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     this.label.paddingLeft = "6px";
     this.root.addControl(this.label);
   }
 
-  set(fraction: number, warn = false, label?: string): void {
+  set(fraction: number, warn = false, label?: string, color?: string): void {
     this.fill.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
-    this.fill.background = warn ? "#ff4b3a" : this.color;
+    this.fill.background = warn ? "#ff4b3a" : (color ?? this.color);
     if (label !== undefined) this.label.text = label;
   }
 }
@@ -61,9 +75,11 @@ export interface RadarBlip {
   kind: BlipKind;
 }
 
-const RADAR_RANGE = 260;
+export const RADAR_RANGE = 260;
+/** Height of one line of the info panel, in pixels. */
+const INFO_LINE = 16;
 const RADAR_RADIUS = 62;
-const BLIP_COLORS: Record<BlipKind, string> = { enemy: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff", salvage: "#4dffa6", base: "#39c2ff", outpost: "#ffa630" };
+export const BLIP_COLORS: Record<BlipKind, string> = { enemy: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff", salvage: "#4dffa6", base: "#39c2ff", outpost: "#ffa630" };
 
 export interface HudState {
   energy: number;
@@ -103,25 +119,31 @@ const SECTION_LABELS: [SectionId, string][] = [
   ["legs", "LEGS "],
 ];
 
-function sectionColor(f: number): string {
+export function sectionColor(f: number): string {
   if (f <= 0) return "#5a6068";
   if (f < 0.35) return "#ff4b3a";
   if (f < 0.7) return "#ffc247";
   return "#7dffa0";
 }
 
-/** Player HUD: crosshair, resources, damage readout, target info, compass and the cockpit frame. */
+/**
+ * Player HUD: crosshair, resources, damage readout, target info, compass and radar. In cockpit
+ * view the cockpit's instruments (src/view/cockpit.ts) show the resources, damage and radar.
+ */
 export class Hud {
   readonly ui: AdvancedDynamicTexture;
   private readonly energy = new Bar("energy", "#39c2ff");
   private readonly heat = new Bar("heat", "#ffa630");
   private readonly targetBar = new Bar("target", "#ff5a4a", 260);
   private readonly targetPanel: StackPanel;
-  private readonly cockpitFrame: Control[] = [];
+  /** Readouts the cockpit's instruments take over in cockpit view. */
+  private readonly cockpitHides: Control[] = [];
   private readonly crosshair: Rectangle[] = [];
   private readonly hitMarker: Rectangle[] = [];
   private readonly heatAlert: TextBlock;
-  private readonly sectionTexts = new Map<SectionId, TextBlock>();
+  private readonly sectionBars = new Map<SectionId, Bar>();
+  private readonly commsPanel: Rectangle;
+  private readonly infoPanel: Rectangle;
   private readonly objective: TextBlock;
   private readonly compass: TextBlock;
   private readonly message: TextBlock;
@@ -141,8 +163,6 @@ export class Hud {
     this.damageVeil.alpha = 0;
     this.damageVeil.isHitTestVisible = false;
     this.ui.addControl(this.damageVeil);
-
-    this.buildCockpitFrame();
 
     for (const [w, h] of [
       [18, 2],
@@ -206,27 +226,33 @@ export class Hud {
     top.addControl(this.message);
     top.addControl(this.targetPanel);
     // Radio dialogue sits under the target readout, wrapped over two lines at most.
+    this.commsPanel = backing("commsPanel");
+    this.commsPanel.width = "700px";
+    this.commsPanel.height = "48px";
+    this.commsPanel.paddingTop = "4px";
     this.comms = text("comms", 14, "#9fe8ff");
-    this.comms.height = "44px";
     this.comms.textWrapping = true;
-    this.comms.outlineWidth = 2;
-    this.comms.outlineColor = "#000000";
-    top.addControl(this.comms);
+    this.comms.paddingLeft = "10px";
+    this.comms.paddingRight = "10px";
+    this.commsPanel.addControl(this.comms);
+    top.addControl(this.commsPanel);
     this.ui.addControl(top);
 
-    // Bottom left: section health, then resource bars.
+    // Bottom left, on a backing panel: section integrity as bars, then the resource bars.
+    const statusPanel = backing("statusPanel");
+    statusPanel.width = "244px";
+    statusPanel.adaptHeightToChildren = true;
+    statusPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    statusPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    statusPanel.left = "12px";
+    statusPanel.top = "-10px";
     const status = new StackPanel("status");
-    status.width = "240px";
-    status.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    status.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    status.left = "16px";
-    status.top = "-12px";
+    status.paddingTop = "8px";
+    status.paddingBottom = "4px";
     for (const [id] of SECTION_LABELS) {
-      const t = text(`section-${id}`, 12);
-      t.height = "16px";
-      t.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      status.addControl(t);
-      this.sectionTexts.set(id, t);
+      const bar = new Bar(`section-${id}`, "#5fe08a", 220, 16);
+      this.sectionBars.set(id, bar);
+      status.addControl(bar.root);
     }
     const gap = new Rectangle("gap");
     gap.height = "6px";
@@ -234,15 +260,24 @@ export class Hud {
     status.addControl(gap);
     status.addControl(this.energy.root);
     status.addControl(this.heat.root);
-    this.ui.addControl(status);
+    statusPanel.addControl(status);
+    this.ui.addControl(statusPanel);
+    this.cockpitHides.push(statusPanel);
 
+    // Right, above the radar: loadout and what can be done here, on a backing panel sized to it.
+    this.infoPanel = backing("infoPanel");
+    this.infoPanel.width = "330px";
+    this.infoPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    this.infoPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    this.infoPanel.left = "-12px";
+    this.infoPanel.top = "-164px";
     this.info = text("info", 12, "#cfe8ff");
+    this.info.lineSpacing = "2px";
     this.info.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.info.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    this.info.paddingRight = "16px";
-    this.info.paddingBottom = "168px";
+    this.info.paddingRight = "10px";
     this.info.isHitTestVisible = false;
-    this.ui.addControl(this.info);
+    this.infoPanel.addControl(this.info);
+    this.ui.addControl(this.infoPanel);
 
     // Bottom right: radar. Up is the direction the player is facing.
     this.radar = new Ellipse("radar");
@@ -256,6 +291,7 @@ export class Hud {
     this.radar.left = "-16px";
     this.radar.top = "-14px";
     this.ui.addControl(this.radar);
+    this.cockpitHides.push(this.radar);
     const self = new Rectangle("radarSelf");
     self.width = "6px";
     self.height = "6px";
@@ -263,34 +299,6 @@ export class Hud {
     self.background = "#ffffff";
     self.rotation = Math.PI / 4;
     this.radar.addControl(self);
-  }
-
-  private buildCockpitFrame(): void {
-    const strip = (name: string, cfg: (r: Rectangle) => void): void => {
-      const r = new Rectangle(name);
-      r.thickness = 0;
-      r.background = PANEL;
-      r.isVisible = false;
-      cfg(r);
-      this.ui.addControl(r);
-      this.cockpitFrame.push(r);
-    };
-    strip("canopyTop", (r) => {
-      r.height = "5%";
-      r.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    });
-    strip("dashboard", (r) => {
-      r.height = "21%";
-      r.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    });
-    for (const side of [-1, 1]) {
-      strip(`strut${side}`, (r) => {
-        r.width = "4%";
-        r.height = "130%";
-        r.left = `${side * 43}%`;
-        r.rotation = side * 0.16;
-      });
-    }
   }
 
   /** Show a marker that follows a mech, coloured by how it regards the player. */
@@ -364,13 +372,11 @@ export class Hud {
       this.heatAlert.color = "#ffa630";
       this.heatAlert.alpha = 1;
     }
-    for (const c of this.cockpitFrame) c.isVisible = state.cockpit;
+    for (const c of this.cockpitHides) c.isVisible = !state.cockpit;
 
     for (const [id, label] of SECTION_LABELS) {
       const f = state.sections[id];
-      const t = this.sectionTexts.get(id)!;
-      t.text = `${label} ${f <= 0 ? "DESTROYED" : `${Math.ceil(f * 100)}%`}`;
-      t.color = sectionColor(f);
+      this.sectionBars.get(id)!.set(f, false, `${label} ${f <= 0 ? "DESTROYED" : `${Math.ceil(f * 100)}%`}`, sectionColor(f));
     }
 
     // Crosshair greys out while weapons are locked. Hits show as ticks: white, or red and
@@ -402,7 +408,10 @@ export class Hud {
     this.objective.text = state.objective;
     this.message.text = state.message ?? "";
     this.comms.text = state.comms ? `${state.comms.speaker.toUpperCase()}: ${state.comms.text}` : "";
+    this.commsPanel.alpha = state.comms ? 1 : 0;
     this.info.text = state.info;
+    this.infoPanel.isVisible = state.info !== "";
+    this.infoPanel.height = `${state.info.split("\n").length * INFO_LINE + 12}px`;
 
     this.updateRadar(state.radar);
 

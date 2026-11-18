@@ -17,6 +17,8 @@ first" questions with the user.
 - `npm run build`: typecheck + production build to `dist/`
 - `npm run check`: typecheck, unit tests and e2e in one go
 - `npm run trace -- perf/<file>`: summarise a Chrome Performance trace (see "Dev tools in the game")
+- `npm run models`: regenerate the game's own glb models in `public/models/` and their rows in
+  `public/models/ATTRIBUTION.md` (from `scripts/make-models.mjs`)
 
 Run `npm run check` after any gameplay change, and look at the screenshots.
 
@@ -40,7 +42,11 @@ Key seams:
 
 - `Intent` (`src/sim/intent.ts`): player input and AI both produce one; all mechs share the same code.
 - `PartVisual` (`src/view/parts/PartVisual.ts`): the only interface gameplay has to a part's
-  appearance. Procedural parts implement it now; a glTF-backed implementation can be added later.
+  appearance. `GltfPartVisual` draws a part from a model listed in `src/data/models.ts`, with the
+  procedural part underneath as its rig and fallback: model nodes `joint.<name>` follow the
+  procedural node of that name, `att.<name>` nodes replace attachment points, clips
+  `pose.<channel>` are scrubbed by that pose channel, and materials named primary, secondary,
+  accent, metal and dark take the faction's colours.
 - `FrameDef` (`src/data/frames.ts`): a frame is a data row: handling, abilities (dash charges,
   brace), hardpoints and model proportions. No frame has its own controller code.
 - `Kit` (`src/sim/loadout.ts`): the weapon and plating definitions a mech is built from. An AI
@@ -152,11 +158,29 @@ Key seams:
 - A site a mission is waiting to see cleared is frozen in the war (`awaitedSites`), so only
   the player can clear it.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
+- A procedural part's node names are how models find their joints (`hip_l`, `knee_r`, `pivot`,
+  `forearm`, `jet_l`...). Renaming one breaks the models that follow it; `GltfPartVisual` warns.
+- Every file in `public/models/` needs a row in its `ATTRIBUTION.md`; a unit test fails otherwise.
+  Rows between the `generated` markers are rewritten by `npm run models`.
+- The HUD is drawn by a second camera on its own layer (`Graphics`), so post-processing leaves it
+  sharp. Any other full-screen GUI texture must use that layer too, or it is processed and
+  blurred with the scene.
+- Graphics quality (`src/data/quality.ts`) is a saved setting. Structures that should cast sun
+  shadows are marked with `castsShadow`; mechs are added automatically.
+- Sounds take a world position (or null for the player's own cockpit), not a distance: `Sfx`
+  places them relative to the camera.
+- A gamepad's B button presses the button marked with `back()` in `src/view/screens.ts`. A new
+  screen that can be left without choosing should mark its close button that way.
 - Angles: yaw 0 faces +Z, positive yaw turns toward +X, positive pitch looks up.
 
 ## Dev tools in the game
 
 Backquote (`) toggles a stats overlay and live sliders for the player frame's handling values.
+
+Open the game with `?procedural` in the URL to draw every mech part procedurally instead of from
+its model (for before-and-after comparisons). `__game.world.cameraRig.showcase = { yaw: 0.6,
+distance: 9, height: 1.2 }` looks at the player's mech from a fixed angle (null to stop), and
+`__game.world.graphics.apply("high")` switches the graphics preset.
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
 and unlock every frame and mount.

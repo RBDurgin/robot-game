@@ -1,4 +1,5 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
+import { Particles } from "./particles";
 
 type Kind = "tracer" | "spark" | "blast" | "dust";
 
@@ -20,8 +21,12 @@ export class Effects {
   private readonly pools: Record<Kind, Mesh[]> = { tracer: [], spark: [], blast: [], dust: [] };
   private readonly shellPool: Mesh[] = [];
   private readonly materials = new Map<number, StandardMaterial>();
+  /** Sparks, fire, smoke and exhaust, scaled by the graphics quality setting. */
+  readonly particles: Particles;
 
-  constructor(private readonly scene: Scene) {}
+  constructor(private readonly scene: Scene) {
+    this.particles = new Particles(scene);
+  }
 
   /** Effects currently on screen. */
   get activeCount(): number {
@@ -114,11 +119,18 @@ export class Effects {
 
   blast(at: Vector3, radius: number, hex = 0xffa23c): void {
     this.spawn("blast", 0.4, radius * 2, hex).position.copyFrom(at);
+    this.particles.explosion(at, radius);
+  }
+
+  /** Fragments thrown where a shot lands: off armour, or off the ground. */
+  impact(at: Vector3, onMech: boolean, size = 1): void {
+    this.particles.impact(at, onMech, size);
   }
 
   /** Low, spreading puff kicked up where a mech lands. */
   dust(at: Vector3, radius: number): void {
     this.spawn("dust", 0.55, radius * 2, 0x9a8f7c).position.copyFrom(at);
+    this.particles.dust(at, radius);
   }
 
   /** A visible shell for a projectile; return it with releaseShell when the projectile ends. */

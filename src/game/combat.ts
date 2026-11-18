@@ -158,6 +158,7 @@ export class Combat {
         this.effects.tracer(muzzle, end, def.color);
         if (!hit) continue;
         this.effects.spark(hit.point, hit.mech ? 1.6 : 1.0, hit.mech ? 0xffffff : def.color);
+        this.effects.impact(hit.point, !!hit.mech);
         if (hit.mech && hit.section) {
           const key = `${hit.mech.name}/${hit.section}`;
           const entry = hits.get(key) ?? { mech: hit.mech, section: hit.section, count: 0 };
@@ -188,7 +189,10 @@ export class Combat {
     const hit = this.trace(muzzle, dir, def.range, mech);
     const end = hit ? hit.point : muzzle.add(dir.scale(def.range));
     this.effects.beam(muzzle, end, def.color);
-    if (hit) this.effects.spark(hit.point, 0.8, def.color);
+    if (hit) {
+      this.effects.spark(hit.point, 0.8, def.color);
+      this.effects.impact(hit.point, !!hit.mech, 0.25);
+    }
     const pulses = beamPulses(weapon, dt, WEAPON_RULES.beamPulse);
     if (pulses === 0) return;
     this.events.onFire(mech, def, muzzle);
@@ -221,6 +225,7 @@ export class Combat {
       if (Math.hypot(dx, dz) > MELEE.range || Math.abs(other.feet.y - mech.feet.y) > mech.frame.height) continue;
       if (Math.abs(angleDiff(mech.state.torsoYaw, yawFromDir(dx, dz))) > MELEE.arc / 2) continue;
       this.effects.spark(other.center, 3, 0xffffff);
+      this.effects.impact(other.center, true, 2.5);
       this.damage(other, "torso", MELEE.damage, mech);
     }
   }

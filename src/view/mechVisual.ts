@@ -1,6 +1,8 @@
 import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import type { ColorScheme } from "../data/factions";
-import type { FrameDef, HardpointId } from "../data/frames";
+import type { FrameDef, FrameId, HardpointId } from "../data/frames";
+import { MODELS, WEAPON_MODELS, type ModelEntry, type PartSlot } from "../data/models";
+import { GltfPartVisual, modelsEnabled } from "./parts/GltfPartVisual";
 import type { PartVisual } from "./parts/PartVisual";
 import {
   getPartMaterials,
@@ -61,6 +63,10 @@ export class MechVisual {
   private readonly recoil: Record<ArmSide, number> = { armL: 0, armR: 0 };
   private airborne = 0;
   private crouch = 0;
+  /** Thruster level from the last update, 0..1. */
+  thrust = 0;
+  /** Imported models still loading. */
+  private readonly loading: Promise<void>[] = [];
 
   constructor(
     private readonly scene: Scene,
@@ -77,29 +83,27 @@ export class MechVisual {
     this.markerNode.parent = this.root;
     this.markerNode.position.y = 6;
 
-    this.legs = new ProceduralLegs(scene, this.mats, look.hipHeight, look.bulk);
+    // Each part is procedural unless the model manifest names a file for it.
+    const part = (slot: PartSlot, procedural: PartVisual): PartVisual => this.dress(procedural, MODELS[frame.id as FrameId]?.[slot]);
+
+    this.legs = part("legs", new ProceduralLegs(scene, this.mats, look.hipHeight, look.bulk));
     this.legs.root.parent = this.root;
 
     this.torsoPivot = new TransformNode("torsoPivot", scene);
     this.torsoPivot.parent = this.legs.attachment("hip");
 
-    this.torso = new ProceduralTorso(
-      scene,
-      this.mats,
-      look.bulk,
-      frame.hardpoints.some((h) => h.mount === "shoulder"),
-    );
+    this.torso = part("torso", new ProceduralTorso(scene, this.mats, look.bulk, frame.hardpoints.some((h) => h.mount === "shoulder")));
     this.torso.root.parent = this.torsoPivot;
 
-    this.head = new ProceduralHead(scene, this.mats, look.head);
+    this.head = part("head", new ProceduralHead(scene, this.mats, look.head));
     this.head.root.parent = this.torso.attachment("neck");
 
-    this.backpack = new ProceduralBackpack(scene, this.mats, look.bulk);
+    this.backpack = part("backpack", new ProceduralBackpack(scene, this.mats, look.bulk));
     this.backpack.root.parent = this.torso.attachment("back");
 
     this.arms = {
-      armL: new ProceduralArm(scene, this.mats, -1, look.bulk),
-      armR: new ProceduralArm(scene, this.mats, 1, look.bulk),
+      armL: part("armL", new ProceduralArm(scene, this.mats, -1, look.bulk)),
+      armR: part("armR", new ProceduralArm(scene, this.mats, 1, look.bulk)),
     };
     this.arms.armL.root.parent = this.torso.attachment("shoulder_l");
     this.arms.armR.root.parent = this.torso.attachment("shoulder_r");
@@ -112,7 +116,7 @@ export class MechVisual {
     this.shoulderPivots[hardpoint]?.dispose();
     delete this.shoulderPivots[hardpoint];
     if (!shape) return;
-    const weapon = new ProceduralWeapon(this.scene, this.mats, shape);
+    const weapon = this.dress(new ProceduralWeapon(this.scene, this.mats, shape), WEAPON_MODELS[shape]);
     if (hardpoint === "armL" || hardpoint === "armR") {
       weapon.root.parent = this.arms[hardpoint].attachment("hand");
     } else {
@@ -124,6 +128,14 @@ export class MechVisual {
       this.shoulderPivots[hardpoint] = pivot;
     }
     this.weapons[hardpoint] = weapon;
+  }
+
+  /** The imported model for a part over its procedural rig, if the manifest has one. */
+  private dress(procedural: PartVisual, entry: ModelEntry | undefined): PartVisual {
+    if (!entry || !modelsEnabled) return procedural;
+    const imported = new GltfPartVisual(this.scene, procedural.root.name, entry, procedural, this.mats);
+    this.loading.push(imported.ready);
+    return imported;
   }
 
   /** Show or hide an arm, used when the section is destroyed. */
@@ -161,10 +173,34 @@ export class MechVisual {
       this.arms[side].setPose({ pitch: input.torsoPitch, recoil: this.recoil[side] });
     }
     this.backpack.setPose({ thrust: input.thrust });
+    this.thrust = input.thrust;
+  }
+
+  /** World positions of the thruster nozzles, for exhaust effects. */
+  jetPoints(): Vector3[] {
+    return (["jet_l", "jet_r"] as const).flatMap((name) => {
+      const node = this.backpack.attachment(name);
+      return node ? [worldPositionOf(node)] : [];
+    });
+  }
+
+  /** Slots drawn from an imported model right now (debug and tests). */
+  get importedParts(): string[] {
+    const parts: Record<string, PartVisual> = { legs: this.legs, torso: this.torso, head: this.head, backpack: this.backpack, ...this.arms };
+    for (const [hardpoint, weapon] of Object.entries(this.weapons)) parts[`${hardpoint}:weapon`] = weapon;
+    return Object.entries(parts)
+      .filter(([, p]) => p instanceof GltfPartVisual && p.loaded)
+      .map(([slot]) => slot);
+  }
+
+  /** Resolves when every imported part has loaded (or settled on its procedural stand-in). */
+  get ready(): Promise<void> {
+    return Promise.all(this.loading).then(() => {});
   }
 
   /** Compile every shader this mech can be drawn with, including the thruster flames. */
   async prewarm(): Promise<void> {
+    await this.ready;
     this.backpack.setPose({ thrust: 1 });
     const meshes = this.root.getChildMeshes();
     for (const mesh of meshes) mesh.computeWorldMatrix(true);

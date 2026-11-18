@@ -1,3 +1,8 @@
+import { QUALITY } from "../data/quality";
+import { Graphics } from "../view/graphics";
+import { Cockpit } from "../view/cockpit";
+import { getPartMaterials } from "../view/parts/proceduralParts";
+import { preloadModels } from "../view/parts/GltfPartVisual";
 import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
 import { BIOMES, BIOME_IDS } from "../data/biomes";
 import { DANGER, ENEMY_TUNING } from "../data/encounters";
@@ -35,7 +40,7 @@ import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "..
 import { buildWorldModel } from "../sim/worldgen";
 import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
-import { Hud, type RadarBlip } from "../view/hud/hud";
+import { Hud, type HudState, type RadarBlip } from "../view/hud/hud";
 import { Screens } from "../view/screens";
 import { PlaceMarker } from "../view/placeMarker";
 import { WreckField } from "../view/wreck";
@@ -94,6 +99,10 @@ export class World {
   /** The named region the player is in. */
   region: RegionDef;
   readonly effects: Effects;
+  /** Shadows, post-processing and surface detail, by the quality setting. */
+  readonly graphics: Graphics;
+  /** The modelled cockpit seen in cockpit view. */
+  private readonly cockpit: Cockpit;
   readonly combat: Combat;
   readonly salvage: SalvageField;
   readonly wrecks: WreckField;
@@ -160,6 +169,8 @@ export class World {
     this.player = player;
     this.rng = makeRng(model.def.seed);
     this.effects = new Effects(scene);
+    this.graphics = new Graphics(scene, scene.getLightByName("sun") as DirectionalLight, cameraRig.camera, hud.ui);
+    this.cockpit = new Cockpit(scene, cameraRig.camera, getPartMaterials(scene, FACTIONS[PLAYER_FACTION].colors));
     this.salvage = new SalvageField(scene);
     this.placeMarker = new PlaceMarker(scene);
     this.wrecks = new WreckField(scene, FEEL.maxWrecks);
@@ -217,13 +228,12 @@ export class World {
       },
       onKill: (victim, attacker) => this.onKill(victim, attacker),
       onFire: (shooter, weapon, at) => {
-        const d = shooter === this.player ? 0 : Vector3.Distance(at, this.player.feet);
         const perShot = weapon.damage * (weapon.pellets ?? 1);
-        this.sfx.shot(weapon.kind === "projectile" ? "projectile" : "hitscan", weapon.kind !== "beam" && perShot > 30, d);
+        this.sfx.shot(weapon.kind, weapon.kind !== "beam" && perShot > 30, shooter === this.player ? null : at);
       },
       onExplosion: (at, radius) => {
         const d = Vector3.Distance(at, this.player.center);
-        this.sfx.explosion(d, radius);
+        this.sfx.explosion(at, radius);
         this.cameraRig.shake(Math.max(0, 1 - d / 60) * 0.8);
       },
     }, rules);
@@ -321,7 +331,8 @@ export class World {
     // world streams in a little per frame as the player moves.
     world.terrain.loadAll(start.x, start.z);
     // Compile the shaders that are first needed mid-fight, while the start screen is up.
-    await Promise.all([world.effects.prewarm(), world.wrecks.prewarm(), world.salvage.prewarm(), player.visual.prewarm()]);
+    // Imported models are loaded once here too, so mechs that wake later do not pop in.
+    await Promise.all([world.effects.prewarm(), world.wrecks.prewarm(), world.salvage.prewarm(), player.visual.prewarm(), preloadModels(scene)]);
     return world;
   }
 
@@ -643,6 +654,8 @@ export class World {
     this.save.settings = settings;
     this.input.sensitivity = settings.sensitivity;
     this.sfx.setVolume(settings.volume);
+    this.graphics.apply(settings.quality);
+    this.effects.particles.scale = QUALITY[settings.quality].particles;
   }
 
   pause(): void {
@@ -1452,14 +1465,16 @@ export class World {
   private groundFeedback(mech: MechEntity): void {
     const s = mech.state;
     const isPlayer = mech === this.player;
-    const distance = isPlayer ? 0 : Vector3.Distance(mech.feet, this.player.feet);
+    const at = isPlayer ? null : mech.feet;
     if (s.landImpact >= FEEL.landMinSpeed) {
       const strength = Math.min(1, s.landImpact / FEEL.landFullSpeed);
-      this.sfx.land(strength, distance);
+      this.sfx.land(strength, at);
       this.effects.dust(mech.feet, mech.frame.radius * (1.2 + 1.8 * strength));
       if (isPlayer) this.cameraRig.shake(FEEL.landShake * strength);
     } else if (s.footstep) {
-      this.sfx.footstep(Math.min(1, mech.horizontalSpeed / mech.frame.sprintSpeed), distance);
+      // Light frames clank higher, heavy ones lower: 0 for the lightest build, 1 for the heaviest.
+      const mass = Math.min(1, Math.max(0, (mech.frame.look.bulk - 0.8) / 0.5));
+      this.sfx.footstep(Math.min(1, mech.horizontalSpeed / mech.frame.sprintSpeed), mass, at);
     }
   }
 
@@ -1653,12 +1668,16 @@ export class World {
 
   /** Per-frame visual update. `alpha` is the fraction of a step since the last simulation step. */
   render(alpha: number, frameDt: number): void {
+    this.input.pollGamepad(frameDt);
     const playing = this.mode === "playing";
     // Streaming runs every frame, menus included, so the world is ready when play resumes.
     this.terrain.update(this.player.feet.x, this.player.feet.z);
     this.updateFog(playing ? frameDt : 0);
     let t = perfStart();
-    for (const mech of this.mechs) mech.renderUpdate(playing ? alpha : 1, playing ? frameDt : 0);
+    for (const mech of this.mechs) {
+      mech.renderUpdate(playing ? alpha : 1, playing ? frameDt : 0);
+      if (playing && mech.alive && mech.visual.thrust > 0.05) for (const at of mech.visual.jetPoints()) this.effects.particles.exhaust(at, mech.visual.thrust);
+    }
     this.cameraRig.update(this.player, this.input.yaw, this.input.pitch, frameDt);
     if (playing) {
       this.effects.update(frameDt);
@@ -1668,7 +1687,12 @@ export class World {
       this.killFlash = Math.max(0, this.killFlash - frameDt * 1.6);
       const s = this.player.state;
       this.sfx.setThrust(!this.player.alive ? 0 : s.boostTime > 0 ? 1 : s.jetting ? 0.7 : 0);
+      this.sfx.setServo(this.player.alive && s.grounded ? Math.min(1, this.player.horizontalSpeed / this.player.frame.sprintSpeed) : 0);
+    } else {
+      this.sfx.setServo(0);
     }
+    const ears = this.cameraRig.camera.position;
+    this.sfx.setListener(ears.x, ears.y, ears.z, this.input.yaw);
 
     perfEnd("visuals", t);
     t = perfStart();
@@ -1690,7 +1714,7 @@ export class World {
         : offered
         ? `New mission: ${offered.title}. Briefing at any base you hold`
         : `Explore the Marches: ${this.save.discovered.length} of ${this.model.sites.length} places found`;
-    this.hud.update({
+    const hudState: HudState = {
       energy: s.energy / this.player.frame.energyMax,
       heat: s.heat / this.player.frame.heatCapacity,
       overheated: s.overheated,
@@ -1713,9 +1737,13 @@ export class World {
       damageFlash: this.damageFlash,
       info: this.infoText(),
       radar: this.radarBlips(),
-    });
+    };
+    this.hud.update(hudState);
+    this.cockpit.setVisible(this.cameraRig.mode === "cockpit" && !this.cameraRig.showcase && this.player.alive);
+    this.cockpit.update(hudState, frameDt);
     perfEnd("hud", t);
     t = perfStart();
+    this.graphics.update(this.player.renderPosition, this.mechs, frameDt);
     this.scene.render();
     perfEnd("scene.render", t);
   }
