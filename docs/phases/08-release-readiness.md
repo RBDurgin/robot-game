@@ -18,7 +18,7 @@ Last, because it polishes what exists. Parts of it (key rebinding, quality setti
 
 ## Build steps
 
-1. **Performance pass.** Profile in a real browser on the target machine. Fix the largest costs first. Low, medium and high quality presets.
+1. **Performance pass.** Profile in a real browser on the target machine. Fix the largest costs first. Low, medium and high quality presets. Known from phase 7: a 23 to 28 ms frame when mechs wake near a site, mostly their first render (warm their materials and meshes ahead of time).
 2. **Bundle size.** The build currently ships all of Babylon.js in one 7 MB file. Switch to per-module imports and split the physics engine into its own chunk.
 3. **Key rebinding.** Remappable controls, saved with settings.
 4. **Accessibility.** HUD colours that do not rely on red versus green, a reduced screen-shake setting, text size option, hold-versus-toggle for sprint and aim, subtitles for all dialogue.

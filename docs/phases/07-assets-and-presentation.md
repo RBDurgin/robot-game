@@ -1,6 +1,6 @@
 # Phase 7: Assets and presentation
 
-**Status: in progress.** Size: 2 to 4 sessions. Depends on: phase 2. Can run alongside other phases, one part at a time.
+**Status: done** (signed off 2026-11-18). Size: 2 to 4 sessions. Depends on: phase 2. Can run alongside other phases, one part at a time.
 
 ## Goal
 
@@ -102,6 +102,13 @@ Not before phase 2, because frame silhouettes and hardpoints should be settled b
 - Step 9. HUD pass: backing panels behind the status, radio and info text; section integrity
   as coloured bars.
 
+- Sign-off (2026-11-18). Traces on the 2019 16-inch MacBook Pro: Medium averaged 59.9 fps with a
+  five-mech fight (median 16.7 ms, p99 17.7 ms, 0.4% of frames over 25 ms); High averaged 59.9
+  fps with up to three mechs fighting (p99 17.7 ms, 0.3% slow, about 9.7 ms of game JavaScript
+  and 5.2 ms of GPU time a frame in a fight). The remaining hitches are single frames of 23 to
+  28 ms when mechs wake near a site, mostly their first render; left for the phase 8
+  performance pass.
+
 ## Out of scope
 
 Changing gameplay rules to suit assets. If a model does not fit a hit volume or hardpoint, adjust the model or its mapping.
@@ -138,4 +145,4 @@ Changing gameplay rules to suit assets. If a model does not fit a hit volume or 
 - [x] Audio upgrade
 - [x] Gamepad support
 - [x] HUD polish
-- [ ] Frame rate check and user sign-off
+- [x] Frame rate check and user sign-off
