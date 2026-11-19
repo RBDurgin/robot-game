@@ -43,3 +43,11 @@ test("mech settles on the ground, walks, jumps and switches view", async ({ page
 
   expect(errors).toEqual([]);
 });
+
+test("profiling mode starts and records frames", async ({ page }) => {
+  const errors = await boot(page, "/?profile");
+  await startGame(page);
+  await waitTicks(page, 30);
+  expect(await page.evaluate(() => document.getElementById("debug")!.textContent ?? "")).not.toContain("Failed");
+  expect(errors).toEqual([]);
+});

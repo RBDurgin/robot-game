@@ -61,3 +61,6 @@ import "@babylonjs/core/Physics/joinedPhysicsEngineComponent";
 import "@babylonjs/core/PostProcesses/RenderPipeline/postProcessRenderPipelineManagerSceneComponent";
 import "@babylonjs/core/Particles/particleSystemComponent";
 import "@babylonjs/core/Culling/ray";
+// GPU frame timing for ?profile (EngineInstrumentation.captureGPUFrameTime).
+import "@babylonjs/core/Engines/Extensions/engine.query";
+import "@babylonjs/core/Engines/AbstractEngine/abstractEngine.timeQuery";

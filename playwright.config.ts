@@ -29,7 +29,8 @@ export default defineConfig({
   webServer: {
     command: prod ? "npm run build && npx vite preview --port 4173 --strictPort" : "npm run dev",
     url: baseURL,
-    reuseExistingServer: true,
+    // The production build is always built fresh: a server left running would serve an old one.
+    reuseExistingServer: !prod,
     timeout: 60_000,
   },
 });
