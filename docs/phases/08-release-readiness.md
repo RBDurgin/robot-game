@@ -49,7 +49,16 @@ Last, because it polishes what exists. Parts of it (key rebinding, quality setti
   later renders), and `mesh.isReady(true)` beforehand moves about half of the latter out. Wakes
   were already one per simulation step. Now a woken mech is built hidden, its meshes are made
   ready a few at a time within `STREAM.wakeWarmMs` (2 ms) per rendered frame, and it is shown
-  and handed to the AI only then, one mech per frame. To be re-measured on the reference machine.
+  and handed to the AI only then, one mech per frame.
+- Step 1, second round (traces 2026-11-19, Medium 59.9 fps / 0.4% slow, High 59.3 fps / 0.7%
+  slow). The waking hitch was still there: a 17 ms frame building the mech, then 28 to 50 ms
+  as it appeared (its render 9 to 15 ms of JavaScript, plus 10 to 15 ms outside the page), and
+  one shader compiled and thrown away per wake. The warm-up had run before the mech's imported
+  parts replaced their procedural stand-ins, so it prepared meshes that were never drawn. Now it
+  waits for the parts, warms only meshes that will be drawn, and then shows them
+  `STREAM.wakeRevealPerFrame` (8) per frame, spreading the first-draw cost over about six frames.
+  No throwaway shader any more (checked headless). Also seen on High: with five mechs in a fight
+  the scene render takes 14 to 19 ms of JavaScript, against 6 on Medium.
 - Step 3 (rebinding). Actions and default keys are data (`src/data/controls.ts`); the player's
   bindings are `settings.bindings` (`src/game/bindings.ts`: up to two keys per action, mouse
   buttons as `Mouse0`..`Mouse4`, taking a key from another action swaps them). The pause screen

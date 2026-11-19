@@ -66,6 +66,17 @@ const FOG_RATE = 0.6;
 /** Damage in one hit that counts as a heavy blow for feedback (sound, shake). */
 const HEAVY_HIT = 45;
 /** Colour of the marker over a mech and of its radar blip, by how it regards the player. */
+/** A woken mech on its way into the world; see `World.warmWaking`. */
+interface Waking {
+  mech: MechEntity;
+  record: MechRecord;
+  /** The meshes it will draw, once its imported parts have loaded. */
+  meshes: AbstractMesh[] | null;
+  /** Meshes warmed, or shown, so far. */
+  next: number;
+  revealing: boolean;
+}
+
 /** A mech's marker colour, by how it regards the player, in the HUD colours in use. */
 const attitudeColor = (attitude: Attitude): string => hudPalette()[attitude];
 /** Allies this close to the player come to help when a fight starts, metres. */
@@ -1361,35 +1372,48 @@ export class World {
       mech.brain.passive = record.mission?.passive ?? false;
       mech.brain.oneWay = record.mission?.route ?? false;
       record.active = true;
-      // Hidden until its meshes are ready to draw (see `warmWaking`), so its first render does
-      // not land in the frame that built it.
+      // Hidden until it has been made ready to draw and revealed a few meshes at a time (see
+      // `warmWaking`), so its first render does not land in one frame.
       mech.visual.root.setEnabled(false);
-      this.waking.push({ mech, record, meshes: mech.visual.root.getChildMeshes(), next: 0 });
+      const entry: Waking = { mech, record, meshes: null, next: 0, revealing: false };
+      this.waking.push(entry);
+      // Imported parts replace their procedural stand-ins once loaded: warm what will be drawn.
+      void mech.visual.ready.then(() => {
+        entry.meshes = mech.visual.root.getChildMeshes(false).filter((m) => m.isEnabled(false) && m.isVisible && m.getTotalVertices() > 0);
+      });
     }
   }
 
-  /** Mechs built but not yet shown, being made ready to draw a few meshes per frame. */
-  private readonly waking: { mech: MechEntity; record: MechRecord; meshes: AbstractMesh[]; next: number }[] = [];
+  /** Mechs built but not yet in the world, being made ready to draw over a few frames. */
+  private readonly waking: Waking[] = [];
 
   /**
-   * Prepare woken mechs for drawing within a small time budget per frame: work out each mesh's
-   * shaders and shadow and glow passes ahead of its first render. A mech joins the world once
-   * every mesh is ready, a few frames after it was built.
+   * Bring woken mechs in without a hitch, one at a time. First each mesh's shaders and passes are
+   * worked out within `STREAM.wakeWarmMs` per rendered frame; then its meshes are shown
+   * `STREAM.wakeRevealPerFrame` at a time, which spreads the cost of their first draw (on the
+   * reference machine a whole mech appearing at once was a 30 to 50 ms frame). At wake distance a
+   * mech is a few pixels across, so its pieces appearing over a few frames is not seen. It joins
+   * the world (AI, combat, HUD marker) once fully shown.
    */
   private warmWaking(): void {
-    const start = performance.now();
-    while (this.waking.length > 0) {
-      const w = this.waking[0]!;
+    const w = this.waking[0];
+    if (!w?.meshes) return;
+    if (!w.revealing) {
+      const start = performance.now();
       while (w.next < w.meshes.length && performance.now() - start < STREAM.wakeWarmMs) w.meshes[w.next++]!.isReady(true);
       if (w.next < w.meshes.length) return;
-      this.waking.shift();
+      for (const m of w.meshes) m.setEnabled(false);
       w.mech.visual.root.setEnabled(true);
-      this.records.set(w.mech, w.record);
-      this.mechs.push(w.mech);
-      this.hud.addMarker(w.mech.visual.markerNode, attitudeColor(this.attitudeOfMech(w.mech)));
-      // One mech joins per frame: showing it still costs a little on its first render.
-      return;
+      w.revealing = true;
+      w.next = 0;
     }
+    w.mech.renderUpdate(1, 0);
+    for (const end = Math.min(w.meshes.length, w.next + STREAM.wakeRevealPerFrame); w.next < end; w.next++) w.meshes[w.next]!.setEnabled(true);
+    if (w.next < w.meshes.length) return;
+    this.waking.shift();
+    this.records.set(w.mech, w.record);
+    this.mechs.push(w.mech);
+    this.hud.addMarker(w.mech.visual.markerNode, attitudeColor(this.attitudeOfMech(w.mech)));
   }
 
   /** Take an enemy mech out of the scene (destroyed, or gone back to sleep). */

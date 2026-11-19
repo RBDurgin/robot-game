@@ -92,8 +92,8 @@ Key seams:
   method on `Scene` needs its side-effect module added there too.
 - The first mission begins with training stages (`training: true`). The e2e helper `startGame`
   skips them; pass `{ training: true }` to keep them.
-- A mech that wakes is not in `World.mechs` at once: it is built hidden and joins a few frames
-  later (`World.waking`), once its meshes are ready to draw.
+- A mech that wakes is not in `World.mechs` at once: it is built hidden, warmed, shown a few
+  meshes per frame, and joins about ten frames later (`World.waking`).
 
 - Ask `heightAt` for where the ground is, never `sampleTerrain`. The ground is the terrain shape
   sampled on a 6.4 m grid, and on sharp crests it is a metre or two below the shape itself.

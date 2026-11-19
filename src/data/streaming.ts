@@ -30,6 +30,8 @@ export const STREAM = {
    * (their first render was a 23 to 28 ms frame on the reference machine).
    */
   wakeWarmMs: 2,
+  /** Meshes of a woken mech shown per rendered frame once warmed (a mech has 40 to 50). */
+  wakeRevealPerFrame: 8,
   /** A site is discovered when the player comes within this many metres of its edge. */
   discoverMargin: 60,
 };
