@@ -8,7 +8,7 @@ Built with [Babylon.js](https://www.babylonjs.com/) and TypeScript. All content 
 
 ## Playing
 
-Open the game's link in a recent desktop browser (Chrome, Edge, Firefox or Safari) and click
+Open https://rbdurgin.github.io/robot-game/ in a recent desktop browser (Chrome, Edge, Firefox or Safari) and click
 **Deploy**. The first mission teaches the controls; every key can be changed from the pause menu
 (Esc), which also has the accessibility options. A standard gamepad works too. Progress saves
 by itself, in three slots, in the browser.

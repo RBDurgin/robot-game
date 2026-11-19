@@ -76,8 +76,11 @@ Last, because it polishes what exists. Parts of it (key rebinding, quality setti
   starts in it, and the start screen says so and offers the copy for download.
 - Step 7 (packaging). GitHub Pages through `.github/workflows/pages.yml` (unit tests, build,
   publish); `docs/hosting.md` covers setup, other static hosts and what a player needs.
-  `README.md` added. `npm run build` collects `public/THIRD-PARTY-LICENSES.txt` from the shipped
+  `README.md` added, with the link to the game. `npm run build` collects `public/THIRD-PARTY-LICENSES.txt` from the shipped
   packages (Babylon.js Apache-2.0 with its NOTICE, Havok MIT).
+  Deployed 2026-11-19 at https://rbdurgin.github.io/robot-game/ (repository
+  RBDurgin/robot-game); checked by loading it in headless Chromium: no errors or failed
+  requests, wasm served as `application/wasm`, the game starts in its first training stage.
 
 ## Out of scope
 
