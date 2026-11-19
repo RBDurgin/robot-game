@@ -1,4 +1,4 @@
-import { FreeCamera, Scene, Vector3 } from "@babylonjs/core";
+import { FreeCamera, Scene, Vector3 } from "../../babylon";
 import { forwardFromYawPitch } from "../../sim/math";
 import type { MechEntity } from "../mechEntity";
 import { raycastWorld } from "../physics";
@@ -39,9 +39,12 @@ export class CameraRig {
     scene.activeCamera = this.camera;
   }
 
+  /** Scales every kick: the player's screen-shake setting, 0 for none. */
+  shakeScale = 1;
+
   /** Kick the camera; `amount` is roughly metres of jitter at the peak. */
   shake(amount: number): void {
-    this.shakeAmount = Math.min(1.2, Math.max(this.shakeAmount, amount));
+    this.shakeAmount = Math.min(1.2, Math.max(this.shakeAmount, amount * this.shakeScale));
   }
 
   toggle(): ViewMode {

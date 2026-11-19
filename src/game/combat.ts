@@ -1,4 +1,4 @@
-import { Mesh, Scene, Vector3 } from "@babylonjs/core";
+import { Mesh, Scene, Vector3 } from "../babylon";
 import type { SectionId } from "../data/frames";
 import { MELEE, WEAPON_RULES, type WeaponDef } from "../data/weapons";
 import { applyDamage, type DamageResult } from "../sim/damage";

@@ -1,4 +1,4 @@
-import { Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Scene, TransformNode, Vector3 } from "../babylon";
 import type { ColorScheme } from "../data/factions";
 import type { FrameDef, FrameId, HardpointId } from "../data/frames";
 import { MODELS, WEAPON_MODELS, type ModelEntry, type PartSlot } from "../data/models";

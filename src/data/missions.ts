@@ -24,6 +24,88 @@ export const MISSIONS: MissionDef[] = [
     auto: true,
     replayable: true,
     stages: [
+      // Training: the controls, taught at home before the first fight. Played once, by a new
+      // pilot; a replay or a player with any mission done starts at "assault". Keys are written
+      // as {key:action} so prompts follow the player's bindings.
+      {
+        id: "t-move",
+        training: true,
+        objective: "Walk the suit: {key:forward} {key:left} {key:back} {key:right} to move, the mouse to look",
+        goals: [{ when: "did", act: "move", count: 6 }],
+        enter: [
+          {
+            do: "say",
+            lines: [
+              hale("Magpie, Hale. The suit's been in pieces for a month. Before you take it anywhere, walk it round the yard for me."),
+              hale("{key:forward} {key:left} {key:back} {key:right} to walk, the mouse to look. The legs follow where you look."),
+            ],
+          },
+        ],
+      },
+      {
+        id: "t-sprint",
+        training: true,
+        objective: "Sprint: {key:sprint} while moving",
+        goals: [{ when: "did", act: "sprint", count: 6 }],
+        enter: [{ do: "say", lines: [hale("Legs are good. Open it up: {key:sprint} to sprint. It costs nothing but noise.")] }],
+      },
+      {
+        id: "t-jets",
+        training: true,
+        objective: "Jump with {key:jump}, and keep holding it in the air for jump jets",
+        goals: [{ when: "did", act: "jets" }],
+        enter: [
+          {
+            do: "say",
+            lines: [hale("Jets. {key:jump} jumps; keep holding it and the jets carry you. They run on energy, the blue bar. Let it refill on the ground.")],
+          },
+        ],
+      },
+      {
+        id: "t-boost",
+        training: true,
+        objective: "Boost dash: {key:boost} while moving, {left} more",
+        goals: [{ when: "did", act: "boost", count: 2 }],
+        enter: [{ do: "say", lines: [hale("Now the dash: {key:boost} while you move throws the suit sideways, out of a line of fire. Twice, so I know it's not a fluke.")] }],
+      },
+      {
+        id: "t-fire",
+        training: true,
+        objective: "Fire your weapons: {key:firePrimary} for the right arm, {key:fireSecondary} for the left",
+        goals: [{ when: "did", act: "fire", count: 8 }],
+        enter: [{ do: "say", lines: [hale("Weapons. {key:firePrimary} fires the right arm, {key:fireSecondary} the left. Put a few rounds into the hillside; it won't mind.")] }],
+      },
+      {
+        id: "t-heat",
+        training: true,
+        objective: "Keep firing until the heat warning shows",
+        goals: [{ when: "did", act: "heatWarning" }],
+        enter: [
+          {
+            do: "say",
+            lines: [
+              hale("Every shot heats the suit: the orange bar. Fill it and the weapons lock until it cools, and that is not a thing you want in a fight."),
+              hale("Find the warning now, while nobody is shooting back. Hold both triggers."),
+            ],
+          },
+        ],
+      },
+      {
+        id: "t-hangar",
+        training: true,
+        objective: "Open the hangar with {key:hangar}",
+        waypoint: { place: BASE_PLACE, label: "BASE" },
+        goals: [{ when: "did", act: "hangar" }],
+        enter: [
+          {
+            do: "say",
+            lines: [
+              hale("That's the line. Let go and it bleeds off."),
+              hale("Last thing. At any base we hold, {key:hangar} opens the hangar: repairs, and parts off what you salvage. Have a look, then deploy."),
+            ],
+          },
+        ],
+      },
       {
         id: "assault",
         objective: "Clear the Combine outpost: {left} hostile{s} remaining",

@@ -1,10 +1,13 @@
-import { Engine, EngineInstrumentation } from "@babylonjs/core";
+import { Engine, EngineInstrumentation } from "./babylon";
 import { FixedStepClock, SIM_DT } from "./sim/clock";
 import { FrameStats } from "./game/frameStats";
 import { PROFILING, perfEnd, perfFrame, perfFrameCount, perfStart, perfTake } from "./game/perf";
 import { World } from "./game/world";
 import { modelsEnabled } from "./view/parts/GltfPartVisual";
 import { buildTweakPanel } from "./view/tweakPanel";
+import { missingFeatures, showFatal } from "./view/fatal";
+import { downloadText, slotAsSaveFile } from "./view/download";
+import { openSaveStore, type SaveStore } from "./game/saveStore";
 
 /** Debug handle used by the e2e tests and for poking at the game from the browser console. */
 export interface GameDebug {
@@ -19,7 +22,18 @@ declare global {
   }
 }
 
+/** The world's save store once there is one, so a crash can offer the save in use. */
+let liveStore: SaveStore | null = null;
+
 async function boot(): Promise<void> {
+  const missing = missingFeatures();
+  if (missing.length > 0) {
+    showFatal("This browser cannot run the game", [
+      `The game needs ${missing.join(" and ")}, and this browser does not offer ${missing.length > 1 ? "them" : "it"}.`,
+      "Use a recent Chrome, Edge, Firefox or Safari on a desktop or laptop computer. If you already are, check that hardware (graphics) acceleration is turned on in the browser's settings, then reload.",
+    ], [{ label: "Reload", primary: true, run: () => location.reload() }]);
+    return;
+  }
   const canvas = document.getElementById("game") as HTMLCanvasElement;
   const debugEl = document.getElementById("debug") as HTMLDivElement;
 
@@ -30,6 +44,7 @@ async function boot(): Promise<void> {
   });
   const overlay = document.getElementById("overlay") as HTMLDivElement;
   const world = await World.create(engine, canvas, overlay);
+  liveStore = world.store;
   const clock = new FixedStepClock();
 
   const stats = new FrameStats();
@@ -72,6 +87,14 @@ async function boot(): Promise<void> {
   window.__game = debug;
 
   engine.runRenderLoop(() => {
+    try {
+      frame();
+    } catch (err) {
+      engine.stopRenderLoop();
+      crashed(err);
+    }
+  });
+  const frame = (): void => {
     const frameDt = engine.getDeltaTime() / 1000;
     stats.add(frameDt);
     const frameStart = perfStart();
@@ -130,7 +153,7 @@ async function boot(): Promise<void> {
       // Opening any menu (Esc) saves what has been recorded since the last one.
       if (!playing && perfFrameCount() >= 120) savePerf();
     }
-  });
+  };
 
   window.addEventListener("resize", () => engine.resize());
 
@@ -151,8 +174,39 @@ async function boot(): Promise<void> {
   });
 }
 
-boot().catch((err) => {
+/** The game failed while starting or playing: say so, and offer a way out that keeps the save. */
+function crashed(err: unknown): void {
   console.error(err);
-  const debugEl = document.getElementById("debug");
-  if (debugEl) debugEl.textContent = `Failed to start: ${String(err)}`;
-});
+  const detail = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+  const store = (): Promise<SaveStore> => (liveStore ? Promise.resolve(liveStore) : openSaveStore());
+  showFatal(
+    "Something went wrong",
+    [
+      "The game hit an error it could not recover from. Your progress up to the last save is kept.",
+      "Reload to carry on. If this happens again as soon as the game starts, the save in use may be the cause: download a copy of it, then start this slot over. The copy can be imported again later from the pause menu.",
+    ],
+    [
+      { label: "Reload", primary: true, run: () => void store().then((s) => s.close()).then(() => location.reload()) },
+      {
+        label: "Download this save",
+        run: async () => {
+          const s = await store();
+          const raw = await s.rawSlot();
+          if (raw) downloadText(`robot-game-slot-${s.slot}.json`, slotAsSaveFile(raw));
+        },
+      },
+      {
+        label: "Start this slot over",
+        run: async () => {
+          if (!window.confirm("Start this slot over? Download the save first if you want to keep it.")) return;
+          const s = await store();
+          await s.startOver();
+          location.reload();
+        },
+      },
+    ],
+    detail,
+  );
+}
+
+boot().catch(crashed);

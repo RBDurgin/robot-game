@@ -1,4 +1,4 @@
-import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "../../babylon";
 import type { ColorScheme } from "../../data/factions";
 import type { FrameLook } from "../../data/frames";
 import { surfaceTextures } from "../surface";

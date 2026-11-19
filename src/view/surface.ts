@@ -1,4 +1,4 @@
-import { RawTexture, Scene, Texture } from "@babylonjs/core";
+import { RawTexture, Scene, Texture } from "../babylon";
 
 /** Texels per side of the generated surface textures; one tile covers TILE_METRES of a part. */
 const SIZE = 512;

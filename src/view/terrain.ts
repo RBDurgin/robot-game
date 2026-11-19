@@ -1,4 +1,4 @@
-import { Color3, Mesh, Scene, StandardMaterial, VertexData } from "@babylonjs/core";
+import { Color3, Mesh, Scene, StandardMaterial, VertexData } from "../babylon";
 import type { RGB } from "../data/biomes";
 import type { WorldDef } from "../data/world";
 import { chunkOrigin } from "../sim/chunks";

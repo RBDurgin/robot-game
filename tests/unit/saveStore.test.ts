@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { freshSave, SAVE_VERSION } from "../../src/game/save";
-import { LEGACY_KEY, localBackend, memoryBackend, readSaveFile, SaveStore, SLOT_COUNT, SLOT_KEY, writeSaveFile, type KeyValue } from "../../src/game/saveStore";
+import { DAMAGED_SLOT_OFFSET, LEGACY_KEY, localBackend, memoryBackend, readSaveFile, SaveStore, SLOT_COUNT, SLOT_KEY, writeSaveFile, type KeyValue } from "../../src/game/saveStore";
 
 function prefs(initial: Record<string, string> = {}): KeyValue & { data: Map<string, string> } {
   const data = new Map(Object.entries(initial));
@@ -132,5 +132,32 @@ describe("save files", () => {
     expect(() => readSaveFile("not json")).toThrow(/not valid JSON/);
     expect(() => readSaveFile("[1, 2]")).toThrow(/not a save from this game/);
     expect(() => readSaveFile('{"name": "something else"}')).toThrow(/not a save from this game/);
+  });
+
+  it("keeps an unreadable save aside instead of overwriting it", async () => {
+    const backend = memoryBackend();
+    await backend.set(1, "{not json");
+    const store = new SaveStore(backend, prefs());
+    expect(await store.load()).toEqual(freshSave());
+    expect(store.damaged).toBe(true);
+    expect(await store.damagedCopy()).toBe("{not json");
+    store.write(freshSave());
+    await store.flush();
+    expect(await backend.get(DAMAGED_SLOT_OFFSET + 1)).toBe("{not json");
+    // A readable save is not flagged.
+    expect(new SaveStore(backend, prefs()).damaged).toBe(false);
+  });
+
+  it("starting a slot over keeps a copy of what was there", async () => {
+    const backend = memoryBackend();
+    const store = new SaveStore(backend, prefs());
+    const save = freshSave();
+    save.scrap = 42;
+    store.write(save);
+    await store.flush();
+    const raw = await store.rawSlot();
+    await store.startOver();
+    expect(await backend.get(1)).toBeNull();
+    expect(await backend.get(DAMAGED_SLOT_OFFSET + 1)).toBe(raw);
   });
 });

@@ -1,6 +1,11 @@
-import { AdvancedDynamicTexture, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui";
-import type { Scene, TransformNode } from "@babylonjs/core";
+import { AdvancedDynamicTexture, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui/2D";
+import type { Scene, TransformNode } from "../../babylon";
 import type { SectionId } from "../../data/frames";
+import { HUD_PALETTES, type HudColors, type HudPalette } from "../../data/hudColors";
+
+/** The colours in use (a saved setting); the cockpit's screens read them too. */
+let palette: HudPalette = HUD_PALETTES.standard;
+export const hudPalette = (): HudPalette => palette;
 
 export const HUD_FONT = "ui-monospace, Menlo, Consolas, monospace";
 const COMPASS_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -61,7 +66,7 @@ class Bar {
 
   set(fraction: number, warn = false, label?: string, color?: string): void {
     this.fill.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
-    this.fill.background = warn ? "#ff4b3a" : (color ?? this.color);
+    this.fill.background = warn ? palette.warn : (color ?? this.color);
     if (label !== undefined) this.label.text = label;
   }
 }
@@ -76,10 +81,14 @@ export interface RadarBlip {
 }
 
 export const RADAR_RANGE = 260;
+/** Larger text scales the HUD down to this layout height and no further. */
+const HUD_MIN_HEIGHT = 540;
 /** Height of one line of the info panel, in pixels. */
 const INFO_LINE = 16;
 const RADAR_RADIUS = 62;
-export const BLIP_COLORS: Record<BlipKind, string> = { enemy: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff", salvage: "#4dffa6", base: "#39c2ff", outpost: "#ffa630" };
+export function blipColor(kind: BlipKind): string {
+  return kind === "enemy" ? palette.hostile : palette[kind];
+}
 
 export interface HudState {
   energy: number;
@@ -120,10 +129,10 @@ const SECTION_LABELS: [SectionId, string][] = [
 ];
 
 export function sectionColor(f: number): string {
-  if (f <= 0) return "#5a6068";
-  if (f < 0.35) return "#ff4b3a";
-  if (f < 0.7) return "#ffc247";
-  return "#7dffa0";
+  if (f <= 0) return palette.sectionGone;
+  if (f < 0.35) return palette.sectionCritical;
+  if (f < 0.7) return palette.sectionWorn;
+  return palette.sectionOk;
 }
 
 /**
@@ -153,6 +162,7 @@ export class Hud {
   private readonly markers = new Map<TransformNode, Rectangle>();
   private readonly radar: Ellipse;
   private readonly blips: Ellipse[] = [];
+  private textScale = 1;
 
   constructor(scene: Scene) {
     this.ui = AdvancedDynamicTexture.CreateFullscreenUI("hud", true, scene);
@@ -301,6 +311,16 @@ export class Hud {
     this.radar.addControl(self);
   }
 
+  /** Choose the HUD's colours (see src/data/hudColors.ts). Markers are recoloured by the caller. */
+  setColors(colors: HudColors): void {
+    palette = HUD_PALETTES[colors];
+  }
+
+  /** Scale the whole HUD, text and panels together, so nothing overlaps at larger sizes. */
+  setTextScale(scale: number): void {
+    this.textScale = scale;
+  }
+
   /** Show a marker that follows a mech, coloured by how it regards the player. */
   addMarker(node: TransformNode, color: string): void {
     const m = new Rectangle("marker");
@@ -347,12 +367,17 @@ export class Hud {
       blip.height = `${size}px`;
       blip.left = `${c.x * k}px`;
       blip.top = `${-c.z * k}px`;
-      blip.background = BLIP_COLORS[c.kind];
+      blip.background = blipColor(c.kind);
       blip.alpha = d > RADAR_RANGE ? 0.55 : 1;
     });
   }
 
   update(state: HudState): void {
+    // The GUI scales everything by its height over the ideal height; 0 turns that off. The HUD
+    // is never laid out for less than 540 pixels of height, or its panels would overlap.
+    const height = this.ui.getSize().height;
+    const ideal = this.textScale === 1 ? 0 : Math.max(Math.round(height / this.textScale), Math.min(height, HUD_MIN_HEIGHT));
+    if (this.ui.idealHeight !== ideal) this.ui.idealHeight = ideal;
     this.energy.set(state.energy);
     // Blink twice a second; the warning phase blinks the bar only, the lockout blinks everything.
     const blink = Math.floor(performance.now() / 250) % 2 === 0;
@@ -365,7 +390,7 @@ export class Hud {
     this.heatAlert.isVisible = state.overheated || hot;
     if (state.overheated) {
       this.heatAlert.text = "OVERHEAT - WEAPONS LOCKED";
-      this.heatAlert.color = "#ff4b3a";
+      this.heatAlert.color = palette.warn;
       this.heatAlert.alpha = blink ? 1 : 0.35;
     } else if (hot) {
       this.heatAlert.text = "HEAT CRITICAL";
@@ -389,7 +414,7 @@ export class Hud {
       const sx = i === 0 || i === 3 ? -1 : 1;
       const sy = i < 2 ? -1 : 1;
       tick.alpha = Math.min(1, Math.max(state.hitFlash, state.killFlash) * 1.5);
-      tick.background = kill ? "#ff5a4a" : "#ffffff";
+      tick.background = kill ? palette.hostile : "#ffffff";
       tick.width = kill ? "16px" : "12px";
       tick.height = kill ? "3px" : "2px";
       tick.left = `${sx * spread}px`;
@@ -416,6 +441,6 @@ export class Hud {
     this.updateRadar(state.radar);
 
     this.targetPanel.isVisible = state.target !== null;
-    if (state.target) this.targetBar.set(state.target.health, false, state.target.name.toUpperCase());
+    if (state.target) this.targetBar.set(state.target.health, false, state.target.name.toUpperCase(), palette.hostile);
   }
 }

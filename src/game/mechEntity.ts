@@ -1,4 +1,4 @@
-import { CharacterSupportedState, PhysicsCharacterController, Scene, Vector3 } from "@babylonjs/core";
+import { CharacterSupportedState, PhysicsCharacterController, Scene, Vector3 } from "../babylon";
 import { FACTIONS, type FactionId } from "../data/factions";
 import { HARDPOINT_IDS, type FrameDef, type HardpointDef, type HardpointId, type SectionId } from "../data/frames";
 import type { Loadout } from "../data/loadouts";

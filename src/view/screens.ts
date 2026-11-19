@@ -1,7 +1,11 @@
 import { FRAME_IDS, FRAMES, type FrameDef, type FrameId, type Trigger } from "../data/frames";
 import { MODS } from "../data/mods";
 import type { WeaponDef } from "../data/weapons";
-import type { Settings } from "../game/save";
+import { TEXT_SCALES, defaultSettings, type Settings } from "../game/save";
+import { ACTION_IDS, ACTIONS, MAX_KEYS_PER_ACTION, RESERVED_KEYS, type ActionId } from "../data/controls";
+import { keyLabel, rebind, unbind } from "../game/bindings";
+import { isHudColors } from "../data/hudColors";
+import { CREDITS } from "../data/credits";
 import { isQualityLevel, QUALITY } from "../data/quality";
 import { PAD_CONTROLS } from "../data/gamepad";
 import type { SlotInfo } from "../game/saveStore";
@@ -36,24 +40,39 @@ function back(b: HTMLButtonElement): HTMLButtonElement {
   return b;
 }
 
-const CONTROLS: [string, string][] = [
-  ["W A S D", "Move"],
-  ["Mouse", "Aim"],
-  ["Shift", "Sprint"],
-  ["Space", "Jump, hold for jump jets"],
-  ["Q", "Boost dash"],
-  ["Left / Right mouse", "Fire right / left arm weapon"],
-  ["E / Middle mouse", "Fire shoulder weapons (heavy frame)"],
-  ["F", "Melee strike"],
-  ["V", "Switch third-person / cockpit view"],
-  ["H", "Hangar (at a base you hold, or an ally's)"],
-  ["G", "Call allied pilots to your wing, or release them"],
-  ["B", "Mission briefing (at a base, when one is on offer)"],
-  ["C", "Contracts (at a base)"],
-  ["L", "Mission log"],
-  ["M", "World map and fast travel"],
-  ["Esc", "Pause"],
-];
+/**
+ * Wait for the next key or mouse button and hand its code to `done` (null if cancelled with
+ * Esc, or "" for Delete / Backspace, which clear the key). Listens ahead of the game's own
+ * input, so the press does nothing else.
+ */
+function captureKey(owner: HTMLElement, done: (code: string | null) => void): void {
+  const finish = (code: string | null): void => {
+    window.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("mousedown", onMouse, true);
+    window.removeEventListener("contextmenu", onMenu, true);
+    done(code);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    if (!owner.isConnected || e.code === "Escape") return finish(null);
+    if (e.code === "Delete" || e.code === "Backspace") return finish("");
+    if (RESERVED_KEYS.includes(e.code)) return;
+    finish(e.code);
+  };
+  const onMouse = (e: MouseEvent): void => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    finish(owner.isConnected ? `Mouse${e.button}` : null);
+  };
+  const onMenu = (e: MouseEvent): void => e.preventDefault();
+  // At once: the press that asked for this has already been handled (a click's mousedown, or
+  // the key that clicked a focused button), so it cannot be taken as the answer.
+  window.addEventListener("keydown", onKey, true);
+  window.addEventListener("mousedown", onMouse, true);
+  window.addEventListener("contextmenu", onMenu, true);
+}
 
 export interface PauseOptions {
   /** True for the first screen shown on load. */
@@ -71,6 +90,10 @@ export interface PauseOptions {
   onImport(text: string): Promise<string | null>;
   /** Empty the slot in use and start again. */
   onReset(): void;
+  /** Something the player must know before playing (a save that could not be read), with an action. */
+  notice?: { text: string; action: string; run(): void };
+  /** Offered while the first mission is teaching the controls: go straight to the real thing. */
+  onSkipTraining?: () => void;
 }
 
 export interface HangarOptions {
@@ -85,6 +108,8 @@ export interface HangarOptions {
   /** Called after each purchase or sale, to save it. */
   onTrade(): void;
   onDeploy(frame: FrameId, fit: Fit): void;
+  /** What fires each trigger, as the player has it bound. */
+  fireKeys: Record<Trigger, string>;
 }
 
 export interface MapOptions {
@@ -106,7 +131,6 @@ export interface MapOptions {
   onClose(): void;
 }
 
-const FIRE_KEYS: Record<Trigger, string> = { primary: "LMB", secondary: "RMB", tertiary: "E" };
 
 /** One line of numbers for a weapon, in the units that suit its kind. */
 function weaponNumbers(w: WeaponDef): string {
@@ -220,6 +244,11 @@ export class Screens {
     return !this.root.hidden;
   }
 
+  /** Scale every menu (the text-size setting). */
+  zoom(scale: number): void {
+    this.root.style.setProperty("zoom", String(scale));
+  }
+
   hide(): void {
     this.root.hidden = true;
     this.root.replaceChildren();
@@ -274,8 +303,65 @@ export class Screens {
       opts.onSettings({ ...settings });
     });
 
-    const controls = el("dl", "controls");
-    for (const [key, action] of CONTROLS) controls.append(el("dt", "", [key]), el("dd", "", [action]));
+    // Each action with a button per key: click one, then press the new key or mouse button.
+    const controls = el("div", "bindings");
+    const drawBindings = (): void => {
+      controls.replaceChildren(
+        el("div", "binding fixed", [el("span", "", ["Look and aim"]), el("span", "key", ["Mouse"])]),
+        ...ACTION_IDS.map((id: ActionId) => {
+          const keys = settings.bindings[id];
+          const slots = Array.from({ length: Math.min(MAX_KEYS_PER_ACTION, keys.length + 1) }, (_, i) => i);
+          return el("div", "binding", [
+            el("span", "", [ACTIONS[id].label]),
+            ...slots.map((slot) => {
+              const code = keys[slot];
+              const b = button(code ? keyLabel(code) : slot === 0 ? "Unbound" : "+", () => {
+                b.textContent = "Press a key…";
+                b.classList.add("listening");
+                captureKey(b, (pressed) => {
+                  if (pressed === "") settings.bindings = unbind(settings.bindings, id, slot);
+                  else if (pressed) settings.bindings = rebind(settings.bindings, id, slot, pressed);
+                  if (pressed !== null) opts.onSettings({ ...settings });
+                  if (b.isConnected) {
+                    drawBindings();
+                    controls.querySelector<HTMLButtonElement>(`[data-binding="${id}:${slot}"]`)?.focus();
+                  }
+                });
+              }, "key");
+              b.dataset.binding = `${id}:${slot}`;
+              b.setAttribute("aria-label", `${ACTIONS[id].label}: ${code ? keyLabel(code) : "none"}. Change`);
+              return b;
+            }),
+          ]);
+        }),
+        el("div", "binding fixed", [el("span", "", ["Pause"]), el("span", "key", ["Esc"])]),
+      );
+    };
+    drawBindings();
+    const resetControls = button("Reset controls", () => {
+      settings.bindings = defaultSettings().bindings;
+      opts.onSettings({ ...settings });
+      drawBindings();
+    }, "secondary");
+
+    const choice = <T extends string | number>(label: string, options: [T, string][], current: T, apply: (v: T) => void): HTMLElement => {
+      const select = el("select");
+      select.setAttribute("aria-label", label);
+      for (const [value, text] of options) {
+        const o = el("option", "", [text]);
+        o.value = String(value);
+        o.selected = value === current;
+        select.append(o);
+      }
+      select.addEventListener("change", () => {
+        const picked = options.find(([v]) => String(v) === select.value);
+        if (!picked) return;
+        apply(picked[0]);
+        opts.onSettings({ ...settings });
+      });
+      return el("label", "row", [el("span", "", [label]), select]);
+    };
+    const textSizes: [number, string][] = TEXT_SCALES.map((t, i) => [t, ["Normal", "Large", "Larger"][i] ?? `${t}x`]);
     const padControls = el("dl", "controls");
     for (const [key, action] of PAD_CONTROLS) padControls.append(el("dt", "", [key]), el("dd", "", [action]));
 
@@ -314,8 +400,18 @@ export class Screens {
         });
     });
 
+    const licences = el("a", "", ["Third-party licences"]);
+    licences.href = "THIRD-PARTY-LICENSES.txt";
+    licences.target = "_blank";
+    licences.rel = "noopener";
+    const credits = el("details", "credits", [
+      el("summary", "", [`Credits · version ${__APP_VERSION__}`]),
+      el("dl", "controls", CREDITS.flatMap(([role, who]) => [el("dt", "", [role]), el("dd", "", [who])])),
+      el("p", "dim", [licences]),
+    ]);
     const panel = el("div", "panel", [
       el("h1", "", [opts.isStart ? "Ashfall Basin" : "Paused"]),
+      ...(opts.notice ? [el("div", "notice", [el("p", "bad", [opts.notice.text]), button(opts.notice.action, opts.notice.run, "secondary")])] : []),
       ...(opts.isStart
         ? [
             el("p", "", [
@@ -324,7 +420,9 @@ export class Screens {
           ]
         : []),
       el("h2", "", ["Controls"]),
+      el("p", "dim", ["Click a key to change it, then press the new key or mouse button. Delete clears it, Esc cancels."]),
       controls,
+      el("div", "actions", [resetControls]),
       el("h2", "", ["Gamepad"]),
       padControls,
       el("h2", "", ["Settings"]),
@@ -332,6 +430,16 @@ export class Screens {
       range("Volume", 0, 1, 0.05, settings.volume, (v) => (settings.volume = v)),
       el("label", "row", [el("span", "", ["Starting view"]), view]),
       el("label", "row", [el("span", "", ["Graphics"]), quality]),
+      el("h2", "", ["Accessibility"]),
+      choice<"hold" | "toggle">("Sprint", [["hold", "Hold"], ["toggle", "Toggle"]], settings.sprintToggle ? "toggle" : "hold", (v) => (settings.sprintToggle = v === "toggle")),
+      range("Screen shake", 0, 1, 0.1, settings.shake, (v) => (settings.shake = v)),
+      choice("Text size", textSizes, settings.textScale, (v) => {
+        const t = TEXT_SCALES.find((x) => x === v);
+        if (t) settings.textScale = t;
+      }),
+      choice<string>("HUD colours", [["standard", "Standard"], ["distinct", "Colour-blind friendly (blue / orange)"]], settings.hudColors, (v) => {
+        if (isHudColors(v)) settings.hudColors = v;
+      }),
       el("h2", "", ["Saved games"]),
       slotList,
       saveNote,
@@ -341,7 +449,11 @@ export class Screens {
         button("Reset this slot", opts.onReset, "secondary"),
         file,
       ]),
-      el("div", "actions", [opts.isStart ? button("Deploy", opts.onResume) : back(button("Resume", opts.onResume))]),
+      credits,
+      el("div", "actions", [
+        opts.isStart ? button("Deploy", opts.onResume) : back(button("Resume", opts.onResume)),
+        ...(opts.onSkipTraining ? [button(opts.isStart ? "Deploy and skip training" : "Skip training", opts.onSkipTraining, "secondary")] : []),
+      ]),
     ]);
     this.show(panel);
   }
@@ -433,7 +545,7 @@ export class Screens {
 
       const slots = frame.hardpoints.map((h) =>
         select(
-          `${h.name} · ${FIRE_KEYS[h.trigger]}`,
+          `${h.name} · ${opts.fireKeys[h.trigger]}`,
           weaponsOwned.filter((item) => isWeaponItem(item) && fitsMount(tunedWeapon(item), h.mount)),
           fit.weapons[h.id],
           true,

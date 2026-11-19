@@ -14,7 +14,8 @@ first" questions with the user.
 - `npm run typecheck`: TypeScript check
 - `npm test`: Vitest unit tests for the simulation layer (fast, no browser)
 - `npm run e2e`: Playwright tests in headless Chromium; writes screenshots to `tests/e2e/screenshots/`
-- `npm run build`: typecheck + production build to `dist/`
+- `npm run e2e:prod`: the same tests against the production build (`vite preview` on port 4173)
+- `npm run build`: typecheck, third-party licences, production build to `dist/` (hosting: `docs/hosting.md`)
 - `npm run check`: typecheck, unit tests and e2e in one go
 - `npm run trace -- perf/<file>`: summarise a Chrome Performance trace (see "Dev tools in the game")
 - `npm run models`: regenerate the game's own glb models in `public/models/` and their rows in
@@ -78,7 +79,21 @@ Key seams:
 - Hostility: `World.hostile(a, b)` is the one question to ask. Between AI factions it is fixed
   (`areHostile`); with the player it follows `save.standing` (`src/sim/reputation.ts`).
 
+- Controls: actions and default keys are data in `src/data/controls.ts`; the player's bindings
+  are `settings.bindings`. Read input by action (`input.held("jump")`, `input.onAction`), never
+  by key code, and name keys in text through `input.keyName(action)` (or `{key:action}` in
+  mission text).
+
 ## Things that are easy to get wrong
+
+- Import Babylon core from `src/babylon.ts`, never from `"@babylonjs/core"` (that pulls in the
+  whole engine, about 5 MB more). A class not exported there yet gets a line there, from its own
+  module. A scene feature that fails at run time with "needs to be imported" or an undefined
+  method on `Scene` needs its side-effect module added there too.
+- The first mission begins with training stages (`training: true`). The e2e helper `startGame`
+  skips them; pass `{ training: true }` to keep them.
+- A mech that wakes is not in `World.mechs` at once: it is built hidden and joins a few frames
+  later (`World.waking`), once its meshes are ready to draw.
 
 - Ask `heightAt` for where the ground is, never `sampleTerrain`. The ground is the terrain shape
   sampled on a 6.4 m grid, and on sharp crests it is a metre or two below the shape itself.

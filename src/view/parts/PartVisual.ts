@@ -1,4 +1,4 @@
-import type { TransformNode } from "@babylonjs/core";
+import type { TransformNode } from "../../babylon";
 
 /** Named points where other parts, weapons or effects attach. */
 export type AttachmentName =

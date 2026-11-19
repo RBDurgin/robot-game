@@ -1,4 +1,4 @@
-import { AbstractMesh, AnimationGroup, AssetContainer, Color3, Mesh, Node, Scene, TransformNode, VertexData } from "@babylonjs/core";
+import { AbstractMesh, AnimationGroup, AssetContainer, Color3, Mesh, Node, Scene, TransformNode, VertexData } from "../../babylon";
 import { getPaletteMaterials, type PartMaterials } from "./proceduralParts";
 
 /**

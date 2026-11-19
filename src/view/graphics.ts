@@ -1,4 +1,4 @@
-import type { AdvancedDynamicTexture } from "@babylonjs/gui";
+import type { AdvancedDynamicTexture } from "@babylonjs/gui/2D";
 import {
   AbstractMesh,
   Camera,
@@ -10,7 +10,7 @@ import {
   Scene,
   ShadowGenerator,
   Vector3,
-} from "@babylonjs/core";
+} from "../babylon";
 import { QUALITY, type QualityDef, type QualityLevel } from "../data/quality";
 import { setSurfaceDetail } from "./parts/proceduralParts";
 

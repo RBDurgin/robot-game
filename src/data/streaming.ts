@@ -25,6 +25,11 @@ export const STREAM = {
   mechSleep: 540,
   /** Mechs woken per simulation step at most, so a garrison does not all build in one step. */
   wakesPerStep: 1,
+  /**
+   * Milliseconds per rendered frame spent making woken mechs ready to draw before they are shown
+   * (their first render was a 23 to 28 ms frame on the reference machine).
+   */
+  wakeWarmMs: 2,
   /** A site is discovered when the player comes within this many metres of its edge. */
   discoverMargin: 60,
 };

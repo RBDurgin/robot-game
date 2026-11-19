@@ -16,7 +16,7 @@ The vertical slice (phase 0) is done. The phases below take it to a full game. E
 | 5 | [Progression and economy](phases/05-progression-and-economy.md) | Spend scrap, part tiers, unlocks, robust saves | 2 | 2 to 3 | Done |
 | 6 | [Story missions](phases/06-story-missions.md) | Scripted missions, dialogue, a short campaign | 4 | 3 to 4 | In progress |
 | 7 | [Assets and presentation](phases/07-assets-and-presentation.md) | Imported models, animation, lighting, audio, gamepad | 2 | 2 to 4, can run alongside | Done |
-| 8 | [Release readiness](phases/08-release-readiness.md) | Performance, accessibility, tutorial, packaging | 6 | 1 to 2 | Not started |
+| 8 | [Release readiness](phases/08-release-readiness.md) | Performance, accessibility, tutorial, packaging | 6 | 1 to 2 | In progress |
 
 Sizes are rough guesses in working sessions, not commitments.
 

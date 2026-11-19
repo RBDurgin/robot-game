@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FRAMES } from "../../src/data/frames";
 import { DEFAULT_QUALITY } from "../../src/data/quality";
-import { freshSave, migrateSave, parseSave, SAVE_VERSION } from "../../src/game/save";
+import { defaultSettings, freshSave, migrateSave, parseSave, SAVE_VERSION } from "../../src/game/save";
 import { addItem, fitFromLoadout, fitLoadout, fitProblems } from "../../src/sim/items";
 
 describe("parseSave", () => {
@@ -22,7 +22,7 @@ describe("parseSave", () => {
     expect(new Set(save.inventory.map((item) => item.uid)).size).toBe(6);
     expect(save.scrap).toBe(87);
     // Saves from before phase 7 have no graphics setting and take the default.
-    expect(save.settings).toEqual({ ...old.settings, quality: DEFAULT_QUALITY });
+    expect(save.settings).toEqual({ ...defaultSettings(), ...old.settings, quality: DEFAULT_QUALITY });
     expect(fitProblems(FRAMES[save.frame], save.fit, save.inventory)).toEqual([]);
   });
 

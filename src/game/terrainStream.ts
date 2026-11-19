@@ -1,4 +1,4 @@
-import type { Mesh, Scene, StandardMaterial } from "@babylonjs/core";
+import type { Mesh, Scene, StandardMaterial } from "../babylon";
 import { STREAM } from "../data/streaming";
 import { chunkDistance, chunkFromKey, chunkIndex, chunkKey, chunkOrigin, chunkScatter, chunksPerSide, planChunks, type ChunkState } from "../sim/chunks";
 import type { Site, WorldModel } from "../sim/terrain";

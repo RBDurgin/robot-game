@@ -1,4 +1,4 @@
-import { Color3, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3 } from "../babylon";
 
 /** Boxes that make up a wreck, for a 4.6 m mech: [size xyz, position xyz, rotation xyz]. */
 const PIECES: [number[], number[], number[]][] = [

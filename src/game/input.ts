@@ -1,4 +1,8 @@
 import { PAD_BUTTON, PAD_FEEL, PAD_HELD, PAD_PRESS, type PadButton } from "../data/gamepad";
+import type { ActionId } from "../data/controls";
+import { actionFor, defaultBindings, keyLabel, type Bindings } from "./bindings";
+
+const PAD_NAMES: Partial<Record<PadButton, string>> = { y: "Y", x: "X", a: "A", b: "B", up: "D-pad up", down: "D-pad down", left: "D-pad left", right: "D-pad right", back: "View", start: "Menu", lb: "LB", rb: "RB", lt: "LT", rt: "RT" };
 import type { Intent } from "../sim/intent";
 import { clamp, wrapAngle, type Vec3 } from "../sim/math";
 
@@ -7,9 +11,8 @@ const MAX_LOOK_PITCH = 1.25;
 /**
  * Keyboard and mouse state for the player.
  *
- *   WASD move · Shift sprint · Space jump / jump jets · Q boost dash
- *   Left mouse primary · Right mouse secondary · E or middle mouse shoulder weapons
- *   F melee · V switch view
+ * Keys and mouse buttons are read through the player's `bindings` (defaults and action names in
+ * src/data/controls.ts): a mouse button counts as the code "Mouse<n>", like a key.
  *
  * A gamepad works alongside them (layout in src/data/gamepad.ts): `pollGamepad` reads it once
  * a frame, and its buttons either feed the same Intent or run the same key handlers. In menus
@@ -23,9 +26,18 @@ export class PlayerInput {
   /** When false (paused, in a menu) the player's intent is neutral. */
   enabled = true;
 
+  /** What each action is bound to; set from the saved settings. */
+  bindings: Bindings = defaultBindings();
+  /** Sprint is pressed once to start and again (or by stopping) to end, rather than held. */
+  sprintToggle = false;
+  private sprintLatched = false;
+
+  /** Keys down, by code. */
   private readonly keys = new Set<string>();
-  private readonly buttons = new Set<number>();
+  /** Mouse buttons down while the mouse is captured, as "Mouse<n>". */
+  private readonly buttons = new Set<string>();
   private readonly pressHandlers = new Map<string, () => void>();
+  private readonly actionHandlers = new Map<ActionId, () => void>();
   /** Called when the browser releases the mouse (Esc, alt-tab). */
   onPointerReleased: (() => void) | null = null;
   private quietRelease = false;
@@ -48,7 +60,7 @@ export class PlayerInput {
       if (e.repeat) return;
       this.usingGamepad = false;
       this.keys.add(e.code);
-      this.pressHandlers.get(e.code)?.();
+      this.press(e.code);
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     window.addEventListener("blur", () => {
@@ -63,9 +75,11 @@ export class PlayerInput {
       }
       // Middle mouse fires shoulder weapons; stop the browser's scroll mode.
       if (e.button === 1) e.preventDefault();
-      this.buttons.add(e.button);
+      const code = `Mouse${e.button}`;
+      this.buttons.add(code);
+      this.press(code);
     });
-    window.addEventListener("mouseup", (e) => this.buttons.delete(e.button));
+    window.addEventListener("mouseup", (e) => this.buttons.delete(`Mouse${e.button}`));
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("mousemove", (e) => {
       if (!this.pointerLocked || !this.enabled) return;
@@ -116,31 +130,68 @@ export class PlayerInput {
     document.exitPointerLock();
   }
 
-  /** Register a one-shot action for a key (by KeyboardEvent.code). */
+  /** Register a one-shot handler for a fixed key (by KeyboardEvent.code), whatever the bindings. */
   onPress(code: string, handler: () => void): void {
     this.pressHandlers.set(code, handler);
   }
 
-  private axis(negative: string, positive: string): number {
-    return (this.keys.has(positive) ? 1 : 0) - (this.keys.has(negative) ? 1 : 0);
+  /** Register a one-shot handler for an action, run by whichever key or button is bound to it. */
+  onAction(action: ActionId, handler: () => void): void {
+    this.actionHandlers.set(action, handler);
+  }
+
+  /** Run what a key or button press does: a fixed key's handler, or its action's. */
+  private press(code: string): void {
+    const fixed = this.pressHandlers.get(code);
+    if (fixed) return fixed();
+    const action = actionFor(this.bindings, code);
+    if (!action) return;
+    if (action === "sprint" && this.sprintToggle && this.enabled) this.sprintLatched = !this.sprintLatched;
+    this.actionHandlers.get(action)?.();
+  }
+
+  /** What to press for an action, for prompts: its first key, or its button while a gamepad is in use. */
+  keyName(action: ActionId): string {
+    if (this.usingGamepad) {
+      const press = (Object.entries(PAD_PRESS) as [PadButton, ActionId][]).find(([, a]) => a === action)?.[0];
+      const held = (Object.entries(PAD_HELD) as [string, PadButton][]).find(([a]) => a === action)?.[1];
+      const name = PAD_NAMES[press ?? held ?? "a"];
+      if ((press || held) && name) return name;
+    }
+    const code = this.bindings[action][0];
+    return code ? keyLabel(code) : `(unbound: ${action})`;
+  }
+
+  /** True while any key or button bound to the action is down. */
+  held(action: ActionId): boolean {
+    return this.bindings[action].some((code) => this.keys.has(code) || this.buttons.has(code));
+  }
+
+  private axis(negative: ActionId, positive: ActionId): number {
+    return (this.held(positive) ? 1 : 0) - (this.held(negative) ? 1 : 0);
   }
 
   buildIntent(aimPoint: Vec3 | null): Intent {
     const on = this.enabled;
     const pad = (action: keyof typeof PAD_HELD): boolean => on && this.padHeld.has(PAD_HELD[action]);
+    const key = (action: ActionId): boolean => on && this.held(action);
+    const moveX = this.axis("left", "right");
+    const moveZ = this.axis("back", "forward");
+    // A toggled sprint ends when the player stops, as it does on the gamepad.
+    if (!on || (moveX === 0 && moveZ === 0)) this.sprintLatched = false;
     return {
-      moveX: on ? clamp(this.axis("KeyA", "KeyD") + this.padMove.x, -1, 1) : 0,
-      moveZ: on ? clamp(this.axis("KeyS", "KeyW") + this.padMove.z, -1, 1) : 0,
+      moveX: on ? clamp(moveX + this.padMove.x, -1, 1) : 0,
+      moveZ: on ? clamp(moveZ + this.padMove.z, -1, 1) : 0,
       aimYaw: this.yaw,
       aimPitch: this.pitch,
       aimPoint,
-      sprint: on && (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.padSprint),
-      boost: (on && this.keys.has("KeyQ")) || pad("boost"),
-      jump: (on && this.keys.has("Space")) || pad("jump"),
-      firePrimary: (on && this.buttons.has(0)) || pad("firePrimary"),
-      fireSecondary: (on && this.buttons.has(2)) || pad("fireSecondary"),
-      fireTertiary: (on && (this.buttons.has(1) || this.keys.has("KeyE"))) || pad("fireTertiary"),
-      melee: (on && this.keys.has("KeyF")) || pad("melee"),
+      sprint: on && ((this.sprintToggle ? this.sprintLatched : this.held("sprint")) || this.padSprint),
+      boost: key("boost") || pad("boost"),
+      jump: key("jump") || pad("jump"),
+      firePrimary: key("firePrimary") || pad("firePrimary"),
+      fireSecondary: key("fireSecondary") || pad("fireSecondary"),
+      fireTertiary: key("fireTertiary") || pad("fireTertiary"),
+      melee: key("melee") || pad("melee"),
     };
   }
 
@@ -176,8 +227,8 @@ export class PlayerInput {
       // Click the stick to sprint; letting go of it ends the sprint.
       if (pressed("l3")) this.padSprint = !this.padSprint;
       if (lx === 0 && ly === 0) this.padSprint = false;
-      for (const [button, code] of Object.entries(PAD_PRESS) as [PadButton, string][]) {
-        if (pressed(button)) this.pressHandlers.get(code)?.();
+      for (const [button, action] of Object.entries(PAD_PRESS) as [PadButton, ActionId][]) {
+        if (pressed(button)) this.actionHandlers.get(action)?.();
       }
       return;
     }

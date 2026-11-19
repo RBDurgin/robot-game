@@ -1,4 +1,4 @@
-import { AbstractMesh, AnimationGroup, AssetContainer, LoadAssetContainerAsync, Node, Scene, TransformNode } from "@babylonjs/core";
+import { AbstractMesh, AnimationGroup, AssetContainer, LoadAssetContainerAsync, Node, Scene, TransformNode } from "../../babylon";
 import { FACTIONS } from "../../data/factions";
 import { instantiate, prototypeFor } from "./modelPrototypes";
 import { getPartMaterials, type PartMaterials } from "./proceduralParts";

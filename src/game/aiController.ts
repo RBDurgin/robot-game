@@ -1,4 +1,4 @@
-import { Scene, Vector3 } from "@babylonjs/core";
+import { Scene, Vector3 } from "../babylon";
 import { blocksFire, createAiState, DEFAULT_AI, thinkAi, type AiConfig, type AiState } from "../sim/ai/brain";
 import { healthFraction } from "../sim/damage";
 import type { Intent } from "../sim/intent";

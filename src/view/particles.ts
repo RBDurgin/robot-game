@@ -1,4 +1,4 @@
-import { Color4, ParticleSystem, RawTexture, Scene, Texture, Vector3 } from "@babylonjs/core";
+import { Color4, ParticleSystem, RawTexture, Scene, Texture, Vector3 } from "../babylon";
 
 /** A burst waiting to be emitted: where, how many, and how hard it is thrown. */
 interface Burst {

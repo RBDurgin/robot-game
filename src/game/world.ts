@@ -3,7 +3,8 @@ import { Graphics } from "../view/graphics";
 import { Cockpit } from "../view/cockpit";
 import { getPartMaterials } from "../view/parts/proceduralParts";
 import { preloadModels } from "../view/parts/GltfPartVisual";
-import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3 } from "@babylonjs/core";
+import { downloadText, slotAsSaveFile } from "../view/download";
+import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3, type AbstractMesh } from "../babylon";
 import { BIOMES, BIOME_IDS } from "../data/biomes";
 import { DANGER, ENEMY_TUNING } from "../data/encounters";
 import { cssColor, FACTIONS, isWarFactionId, PLAYER_FACTION, WAR_FACTION_IDS, type WarFactionId } from "../data/factions";
@@ -30,7 +31,7 @@ import { lockProgress } from "../sim/weapons";
 import { pickAttackers } from "../sim/ai/squad";
 import { cacheTableFor, lootTableFor, rollCache, rollLoot } from "../sim/loot";
 import { lerp, makeRng, type Vec3 } from "../sim/math";
-import { awaitedSites, BASE_PLACE, currentStage, missionEvent, nextMission, objectiveText, resumeMission, startMission, stepMission, type Line, type MissionDef, type MissionEffect, type MissionFacts, type MissionState, type PlaceDef, type WorldEvent } from "../sim/mission";
+import { awaitedSites, BASE_PLACE, currentStage, inTraining, missionEvent, nextMission, objectiveText, PLAYER_STRIDE, resumeMission, skipTraining, startMission, stepMission, type PlayerAct, type Line, type MissionDef, type MissionEffect, type MissionFacts, type MissionState, type PlaceDef, type WorldEvent } from "../sim/mission";
 import { contractDef, contractsOnOffer, isContractId, type ContractSpec } from "../sim/contracts";
 import { patronsOffering, takePatron, type PatronDef } from "../sim/patron";
 import { buildPopulation, garrisonLeft, missionRecords, populationChanges, raidersLeft, raidRecords, syncGarrison, type IdSource, type MechRecord } from "../sim/population";
@@ -40,7 +41,8 @@ import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "..
 import { buildWorldModel } from "../sim/worldgen";
 import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
-import { Hud, type HudState, type RadarBlip } from "../view/hud/hud";
+import { isActionId, type ActionId } from "../data/controls";
+import { Hud, hudPalette, type HudState, type RadarBlip } from "../view/hud/hud";
 import { Screens } from "../view/screens";
 import { PlaceMarker } from "../view/placeMarker";
 import { WreckField } from "../view/wreck";
@@ -64,7 +66,8 @@ const FOG_RATE = 0.6;
 /** Damage in one hit that counts as a heavy blow for feedback (sound, shake). */
 const HEAVY_HIT = 45;
 /** Colour of the marker over a mech and of its radar blip, by how it regards the player. */
-const ATTITUDE_COLORS: Record<Attitude, string> = { hostile: "#ff5a4a", neutral: "#d8d2b8", allied: "#4dd6ff" };
+/** A mech's marker colour, by how it regards the player, in the HUD colours in use. */
+const attitudeColor = (attitude: Attitude): string => hudPalette()[attitude];
 /** Allies this close to the player come to help when a fight starts, metres. */
 const RALLY_RANGE = 320;
 /** Wingmen are picked from allied pilots within this many metres. */
@@ -163,7 +166,7 @@ export class World {
     readonly screens: Screens,
     player: MechEntity,
     save: SaveData,
-    private readonly store: SaveStore,
+    readonly store: SaveStore,
   ) {
     this.save = save;
     this.player = player;
@@ -230,6 +233,7 @@ export class World {
       onFire: (shooter, weapon, at) => {
         const perShot = weapon.damage * (weapon.pellets ?? 1);
         this.sfx.shot(weapon.kind, weapon.kind !== "beam" && perShot > 30, shooter === this.player ? null : at);
+        if (shooter === this.player) this.playerDid("fire");
       },
       onExplosion: (at, radius) => {
         const d = Vector3.Distance(at, this.player.center);
@@ -241,30 +245,32 @@ export class World {
     this.applySettings(save.settings);
     this.cameraRig.mode = save.settings.defaultView;
 
-    input.onPress("KeyV", () => {
-      if (this.mode === "playing") this.cameraRig.toggle();
+    input.onAction("view", () => {
+      if (this.mode !== "playing") return;
+      this.cameraRig.toggle();
+      this.playerDid("view");
     });
-    input.onPress("KeyH", () => {
+    input.onAction("hangar", () => {
       if (this.mode === "playing" && this.atBase && this.player.alive) this.openHangar();
     });
-    input.onPress("KeyB", () => {
+    input.onAction("briefing", () => {
       if (this.mode !== "playing" || !this.player.alive) return;
       if (this.offers) this.openOffers();
       else this.openBriefing();
     });
-    input.onPress("KeyC", () => {
+    input.onAction("contracts", () => {
       if (this.mode === "playing" && this.player.alive) this.openContracts();
     });
-    input.onPress("KeyL", () => {
+    input.onAction("log", () => {
       if (this.mode === "playing") this.openLog();
     });
-    input.onPress("KeyG", () => {
+    input.onAction("wing", () => {
       if (this.mode === "playing" && this.player.alive) this.toggleWingmen();
     });
-    input.onPress("KeyP", () => {
+    input.onAction("pause", () => {
       if (this.mode === "playing") this.pause();
     });
-    input.onPress("KeyM", () => {
+    input.onAction("map", () => {
       if (this.mode === "playing") this.openMap();
       else if (this.mode === "map") this.resume();
     });
@@ -498,7 +504,7 @@ export class World {
       mech.brain!.follow = this.player;
       this.wingmen.add(mech);
     }
-    this.notify(`${near.length} ${FACTIONS[near[0]!.faction].short} ${near.length === 1 ? "pilot" : "pilots"} on your wing. G: release.`, 4);
+    this.notify(`${near.length} ${FACTIONS[near[0]!.faction].short} ${near.length === 1 ? "pilot" : "pilots"} on your wing. ${this.input.keyName("wing")}: release.`, 4);
   }
 
   private releaseWingmen(): void {
@@ -507,7 +513,7 @@ export class World {
   }
 
   private refreshMarkers(): void {
-    for (const mech of this.mechs) if (mech !== this.player) this.hud.setMarkerColor(mech.visual.markerNode, ATTITUDE_COLORS[this.attitudeOfMech(mech)]);
+    for (const mech of this.mechs) if (mech !== this.player) this.hud.setMarkerColor(mech.visual.markerNode, attitudeColor(this.attitudeOfMech(mech)));
   }
 
   // --- The war ---
@@ -656,6 +662,14 @@ export class World {
     this.sfx.setVolume(settings.volume);
     this.graphics.apply(settings.quality);
     this.effects.particles.scale = QUALITY[settings.quality].particles;
+    this.input.bindings = settings.bindings;
+    this.input.sprintToggle = settings.sprintToggle;
+    this.cameraRig.shakeScale = settings.shake;
+    this.hud.setTextScale(settings.textScale);
+    this.hud.setColors(settings.hudColors);
+    for (const mech of this.mechs) if (mech !== this.player) this.hud.setMarkerColor(mech.visual.markerNode, attitudeColor(this.attitudeOfMech(mech)));
+    // Menus are HTML: zoom them as a whole, so their layout scales with the text.
+    this.screens.zoom(settings.textScale);
   }
 
   pause(): void {
@@ -677,14 +691,21 @@ export class World {
         this.store.select(slot);
         this.reload();
       },
-      onExport: () => {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(new Blob([writeSaveFile(this.save)], { type: "application/json" }));
-        link.download = `robot-game-slot-${this.store.slot}.json`;
-        link.click();
-        // Not at once: the browser is still reading it.
-        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
-      },
+      onSkipTraining: this.training
+        ? () => {
+            this.resume();
+            this.skipTraining();
+          }
+        : undefined,
+      onExport: () => downloadText(`robot-game-slot-${this.store.slot}.json`, writeSaveFile(this.save)),
+      notice:
+        this.store.damaged && !this.started
+          ? {
+              text: `The save in slot ${this.store.slot} could not be read, so this is a new game. A copy of the old save was kept.`,
+              action: "Download the old save",
+              run: () => void this.store.damagedCopy().then((raw) => raw && downloadText(`robot-game-slot-${this.store.slot}-damaged.json`, slotAsSaveFile(raw))),
+            }
+          : undefined,
       onImport: async (text) => {
         try {
           this.store.write(readSaveFile(text));
@@ -720,12 +741,14 @@ export class World {
   }
 
   openHangar(): void {
+    this.playerDid("hangar");
     this.mode = "hangar";
     this.input.enabled = false;
     this.input.releasePointer();
     this.sfx.setThrust(0);
     this.sfx.ui();
     this.screens.showHangar({
+      fireKeys: { primary: this.input.keyName("firePrimary"), secondary: this.input.keyName("fireSecondary"), tertiary: this.input.keyName("fireTertiary") },
       frame: this.save.frame,
       fit: this.save.fit,
       wallet: this.save,
@@ -887,6 +910,54 @@ export class World {
     return m !== null && awaitedSites(m.def, m.state).includes(siteId);
   }
 
+  /** Metres walked (and sprinted) since the last `move` (and `sprint`) report. */
+  private walked = { move: 0, sprint: 0 };
+  private heatWarned = false;
+
+  /** Tell a mission's training stage what the player has just done with the suit. */
+  private playerDid(act: PlayerAct): void {
+    const m = this.mission;
+    if (m && inTraining(m.def, m.state)) this.emit({ type: "playerDid", act });
+  }
+
+  /** Compare the suit before and after a step, for training stages. */
+  private reportActs(intent: Intent, before: { grounded: boolean; jetting: boolean; boosting: boolean }, dt: number): void {
+    const m = this.mission;
+    if (!m || !inTraining(m.def, m.state)) return;
+    const s = this.player.state;
+    if (s.grounded) {
+      const d = this.player.horizontalSpeed * dt;
+      this.walked.move += d;
+      if (intent.sprint) this.walked.sprint += d;
+      for (const act of ["move", "sprint"] as const) {
+        while (this.walked[act] >= PLAYER_STRIDE) {
+          this.walked[act] -= PLAYER_STRIDE;
+          this.playerDid(act);
+        }
+      }
+    }
+    if (before.grounded && !s.grounded && intent.jump) this.playerDid("jump");
+    if (!before.jetting && s.jetting) this.playerDid("jets");
+    if (!before.boosting && s.boostTime > 0) this.playerDid("boost");
+    const hot = s.overheated || s.heat / this.player.frame.heatCapacity >= FEEL.heatWarnFraction;
+    if (hot && !this.heatWarned) this.playerDid("heatWarning");
+    this.heatWarned = hot;
+  }
+
+  /** Whether the mission in progress is teaching the controls. */
+  get training(): boolean {
+    const m = this.mission;
+    return m !== null && inTraining(m.def, m.state);
+  }
+
+  /** Leave the training stages of the mission in progress for its first real one. */
+  skipTraining(): void {
+    const m = this.mission;
+    if (!m) return;
+    this.applyMission(m.def, skipTraining(m.def, m.state));
+    this.store.write(this.save);
+  }
+
   /** Report something that has happened to the mission in progress and to anyone listening. */
   private emit(event: WorldEvent): void {
     const m = this.mission;
@@ -945,7 +1016,10 @@ export class World {
   }
 
   beginMission(def: MissionDef): void {
-    const { state, effects } = startMission(def);
+    // Training is for the first time through: a replay, or a player who has finished any
+    // mission, goes straight to the real thing.
+    const veteran = this.save.missions.done.length > 0;
+    const { state, effects } = startMission(def, veteran);
     this.save.missions.active = state;
     this.runMission(def, effects);
   }
@@ -1059,7 +1133,10 @@ export class World {
 
   /** Put lines of dialogue on the radio, one after another. */
   say(lines: Line[]): void {
-    for (const line of lines) this.comms.push({ line, time: FEEL.commsBase + line.text.length * FEEL.commsPerChar });
+    for (const raw of lines) {
+      const line = { ...raw, text: this.withKeys(raw.text) };
+      this.comms.push({ line, time: FEEL.commsBase + line.text.length * FEEL.commsPerChar });
+    }
   }
 
   private failMission(def: MissionDef): void {
@@ -1242,6 +1319,14 @@ export class World {
     }
     const { wake, sleep } = populationChanges(this.population, p.x, p.z, STREAM);
     for (const record of sleep) {
+      // Still being made ready to show: drop it and put the pilot back to sleep as it was.
+      const pending = this.waking.findIndex((w) => w.record === record);
+      if (pending >= 0) {
+        this.waking[pending]!.mech.dispose();
+        this.waking.splice(pending, 1);
+        record.active = false;
+        continue;
+      }
       const mech = this.mechs.find((m) => this.records.get(m) === record);
       if (!mech || this.wingmen.has(mech)) continue;
       record.active = false;
@@ -1276,9 +1361,34 @@ export class World {
       mech.brain.passive = record.mission?.passive ?? false;
       mech.brain.oneWay = record.mission?.route ?? false;
       record.active = true;
-      this.records.set(mech, record);
-      this.mechs.push(mech);
-      this.hud.addMarker(mech.visual.markerNode, ATTITUDE_COLORS[this.attitudeOfMech(mech)]);
+      // Hidden until its meshes are ready to draw (see `warmWaking`), so its first render does
+      // not land in the frame that built it.
+      mech.visual.root.setEnabled(false);
+      this.waking.push({ mech, record, meshes: mech.visual.root.getChildMeshes(), next: 0 });
+    }
+  }
+
+  /** Mechs built but not yet shown, being made ready to draw a few meshes per frame. */
+  private readonly waking: { mech: MechEntity; record: MechRecord; meshes: AbstractMesh[]; next: number }[] = [];
+
+  /**
+   * Prepare woken mechs for drawing within a small time budget per frame: work out each mesh's
+   * shaders and shadow and glow passes ahead of its first render. A mech joins the world once
+   * every mesh is ready, a few frames after it was built.
+   */
+  private warmWaking(): void {
+    const start = performance.now();
+    while (this.waking.length > 0) {
+      const w = this.waking[0]!;
+      while (w.next < w.meshes.length && performance.now() - start < STREAM.wakeWarmMs) w.meshes[w.next++]!.isReady(true);
+      if (w.next < w.meshes.length) return;
+      this.waking.shift();
+      w.mech.visual.root.setEnabled(true);
+      this.records.set(w.mech, w.record);
+      this.mechs.push(w.mech);
+      this.hud.addMarker(w.mech.visual.markerNode, attitudeColor(this.attitudeOfMech(w.mech)));
+      // One mech joins per frame: showing it still costs a little on its first render.
+      return;
     }
   }
 
@@ -1424,7 +1534,13 @@ export class World {
     return regionAt(this.model.def, site?.x ?? record.x, site?.z ?? record.z).danger;
   }
 
+  /** Mission text names keys as `{key:jump}`: write in what the player has bound to them. */
+  private withKeys(text: string): string {
+    return text.replace(/\{key:(\w+)\}/g, (_, action: string) => (isActionId(action) ? this.input.keyName(action) : action));
+  }
+
   notify(text: string, seconds = 3): void {
+    text = this.withKeys(text);
     this.message = { text, time: seconds };
   }
 
@@ -1523,7 +1639,9 @@ export class World {
       // Scripted aim (tests) also drives the camera so the view matches what the mech does.
       this.input.yaw = intent.aimYaw;
       this.input.pitch = intent.aimPitch;
+      const before = { grounded: this.player.state.grounded, jetting: this.player.state.jetting, boosting: this.player.state.boostTime > 0 };
       this.player.step(intent, dt);
+      this.reportActs(intent, before, dt);
       // The rim mountains are the wall; this is the backstop for anyone who jets up them.
       if (this.player.confine(this.model.def.size / 2 - this.model.def.edgeMargin)) this.notify("The mountains are impassable. Turn back.", 2);
       this.groundFeedback(this.player);
@@ -1643,14 +1761,15 @@ export class World {
     const charges = p.frame.boostCharges ?? 1;
     if (charges > 1) lines.push(`Dash ${"●".repeat(p.state.boostCharges)}${"○".repeat(charges - p.state.boostCharges)}`);
     if (p.state.braced) lines.push("BRACED");
+    const k = (action: ActionId): string => this.input.keyName(action);
     lines.push(`Scrap ${this.save.scrap}`);
-    lines.push(`${this.region.name} (${this.regionHolder()}) · M: map`);
-    if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · G: release`);
-    else if (this.alliesNear) lines.push("Press G: call wingmen");
-    if (this.atBase && this.player.alive) lines.push("Press H: hangar (refit, repair)");
-    if (this.atBase && this.player.alive && this.offers) lines.push("Press B: hear the offers");
-    else if (this.atBase && this.player.alive && this.offered) lines.push("Press B: mission briefing");
-    if (this.atBase && this.player.alive) lines.push("Press C: contracts");
+    lines.push(`${this.region.name} (${this.regionHolder()}) · ${k("map")}: map`);
+    if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · ${k("wing")}: release`);
+    else if (this.alliesNear) lines.push(`Press ${k("wing")}: call wingmen`);
+    if (this.atBase && this.player.alive) lines.push(`Press ${k("hangar")}: hangar (refit, repair)`);
+    if (this.atBase && this.player.alive && this.offers) lines.push(`Press ${k("briefing")}: hear the offers`);
+    else if (this.atBase && this.player.alive && this.offered) lines.push(`Press ${k("briefing")}: mission briefing`);
+    if (this.atBase && this.player.alive) lines.push(`Press ${k("contracts")}: contracts`);
     return lines.join("\n");
   }
 
@@ -1672,6 +1791,7 @@ export class World {
     const playing = this.mode === "playing";
     // Streaming runs every frame, menus included, so the world is ready when play resumes.
     this.terrain.update(this.player.feet.x, this.player.feet.z);
+    this.warmWaking();
     this.updateFog(playing ? frameDt : 0);
     let t = perfStart();
     for (const mech of this.mechs) {
@@ -1708,7 +1828,7 @@ export class World {
     if (spot) this.placeMarker.show(spot.x, this.heightAt(spot.x, spot.z), spot.z, spot.radius);
     else this.placeMarker.hide();
     const objective = m
-      ? objectiveText(m.def, m.state, this.missionFacts, this.salvage.count)
+      ? this.withKeys(objectiveText(m.def, m.state, this.missionFacts, this.salvage.count))
       : offers
         ? `${offers.length === 1 ? "An offer is" : `${offers.length} offers are`} waiting for you. Hear ${offers.length === 1 ? "it" : "them"} at any base you hold`
         : offered

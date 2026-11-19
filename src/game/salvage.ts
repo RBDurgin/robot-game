@@ -1,4 +1,4 @@
-import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
+import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "../babylon";
 import type { LootDrop } from "../sim/loot";
 
 const PICKUP_RADIUS = 7;

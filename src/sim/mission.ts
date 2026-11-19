@@ -27,13 +27,23 @@ export interface PlaceDef {
 /** The place id for "the nearest base the player can use", wherever that is at the time. */
 export const BASE_PLACE = "base";
 
+/**
+ * Things the player does with the suit, reported by the world for training stages. `move` and
+ * `sprint` come once per `PLAYER_STRIDE` metres; the rest once each time they happen.
+ */
+export const PLAYER_ACTS = ["move", "sprint", "jump", "jets", "boost", "fire", "heatWarning", "hangar", "view"] as const;
+export type PlayerAct = (typeof PLAYER_ACTS)[number];
+/** Metres of walking (or sprinting) per `move` (or `sprint`) event. */
+export const PLAYER_STRIDE = 5;
+
 /** Things that happen in the world. Counted goals are fed by these. */
 export type WorldEvent =
   | { type: "mechDestroyed"; faction: string; site: string | null; tag: string | null; byPlayer: boolean }
   | { type: "siteCleared"; site: string; byPlayer: boolean }
   | { type: "siteCaptured"; site: string; by: string }
   | { type: "itemCollected"; tag: string | null; count: number }
-  | { type: "playerDestroyed" };
+  | { type: "playerDestroyed" }
+  | { type: "playerDid"; act: PlayerAct };
 
 /**
  * Something a stage waits for. As a goal, a condition stays met once it has been met; a stage
@@ -58,7 +68,9 @@ export type Condition =
   /** The stage has lasted this long. */
   | { when: "elapsed"; seconds: number }
   /** The player's suit destroyed since the stage began. */
-  | { when: "playerDestroyed" };
+  | { when: "playerDestroyed" }
+  /** The player has done something with the suit so many times since the stage began (training). */
+  | { when: "did"; act: PlayerAct; count?: number };
 
 /**
  * A squad a mission brings into the world. Its pilots come from the faction's roster, start
@@ -140,6 +152,11 @@ export interface StageDef {
   fail?: Condition[];
   /** The stage that follows. Without one, the next in the list; the last stage ends the mission. */
   next?: string;
+  /**
+   * Teaches the controls. Training stages come first in a mission and are left out when the
+   * player has played it before, or chooses to skip them.
+   */
+  training?: boolean;
 }
 
 export interface MissionDef {
@@ -204,10 +221,23 @@ function enterStage(state: MissionState, stage: StageDef): MissionEffect[] {
   return [{ do: "stage", stage: stage.id }, ...(stage.enter ?? [])];
 }
 
-/** Begin a mission at its first stage. */
-export function startMission(def: MissionDef): { state: MissionState; effects: MissionEffect[] } {
+/** The first stage that is not training: where a mission starts for someone who knows the controls. */
+const firstRealStage = (def: MissionDef): StageDef => def.stages.find((s) => !s.training) ?? def.stages[0]!;
+
+/** Begin a mission at its first stage, or after its training stages with `skipTraining`. */
+export function startMission(def: MissionDef, skipTraining = false): { state: MissionState; effects: MissionEffect[] } {
   const state: MissionState = { id: def.id, stage: "", goals: [], fails: [], time: 0, status: "active" };
-  return { state, effects: enterStage(state, def.stages[0]!) };
+  return { state, effects: enterStage(state, skipTraining ? firstRealStage(def) : def.stages[0]!) };
+}
+
+/** Whether the mission is in one of its training stages. */
+export function inTraining(def: MissionDef, state: MissionState): boolean {
+  return state.status === "active" && currentStage(def, state).training === true;
+}
+
+/** Leave the training stages for the first real one. Nothing happens outside training. */
+export function skipTraining(def: MissionDef, state: MissionState): MissionEffect[] {
+  return inTraining(def, state) ? enterStage(state, firstRealStage(def)) : [];
 }
 
 /**
@@ -218,7 +248,7 @@ export function resumeMission(def: MissionDef, state: MissionState): MissionEffe
   return enterStage(state, currentStage(def, state));
 }
 
-const targetOf = (c: Condition): number => (c.when === "destroyed" || c.when === "collected" ? c.count : 1);
+const targetOf = (c: Condition): number => (c.when === "destroyed" || c.when === "collected" ? c.count : c.when === "did" ? (c.count ?? 1) : 1);
 
 /** How much an event adds to a counted condition. */
 function counted(c: Condition, e: WorldEvent): number {
@@ -236,6 +266,8 @@ function counted(c: Condition, e: WorldEvent): number {
       return e.type === "siteCaptured" && e.site === c.site && (c.by === undefined || c.by === e.by) ? 1 : 0;
     case "playerDestroyed":
       return e.type === "playerDestroyed" ? 1 : 0;
+    case "did":
+      return e.type === "playerDid" && e.act === c.act ? 1 : 0;
     default:
       return 0;
   }
@@ -301,6 +333,7 @@ function remaining(stage: StageDef, state: MissionState, facts: MissionFacts): n
   if (goal.when === "siteCleared") return facts.defendersAt(goal.site);
   if (goal.when === "elapsed") return Math.max(0, Math.ceil(goal.seconds - state.time));
   if (goal.when === "destroyed" || goal.when === "collected") return Math.max(0, goal.count - (state.goals[0] ?? 0));
+  if (goal.when === "did" && (goal.count ?? 1) > 1) return Math.max(0, (goal.count ?? 1) - (state.goals[0] ?? 0));
   return null;
 }
 
@@ -319,7 +352,10 @@ export function objectiveText(def: MissionDef, state: MissionState, facts: Missi
 /** Sites whose garrison a mission in progress is waiting on: the war leaves them alone meanwhile. */
 export function awaitedSites(def: MissionDef, state: MissionState): string[] {
   if (state.status !== "active") return [];
-  return currentStage(def, state).goals.flatMap((c) => (c.when === "siteCleared" ? [c.site] : []));
+  const stage = currentStage(def, state);
+  // During training, the site the first real stage is about is held as it is for when it starts.
+  const waitingFor = stage.training ? firstRealStage(def) : stage;
+  return waitingFor.goals.flatMap((c) => (c.when === "siteCleared" ? [c.site] : []));
 }
 
 /** The first mission, in order, that is not done and whose requirements are. */
@@ -407,8 +443,12 @@ export function missionProblems(defs: readonly MissionDef[], refs: MissionRefs):
         if (c.when === "destroyed" && c.faction !== undefined && !refs.factions.has(c.faction)) at(`unknown faction "${c.faction}"`);
         if ((c.when === "destroyed" || c.when === "collected") && !(c.count >= 1)) at("a count must be at least 1");
         if (c.when === "elapsed" && !(c.seconds > 0)) at("a time must be more than 0");
+        if (c.when === "did" && !PLAYER_ACTS.includes(c.act)) at(`unknown player action "${c.act}"`);
       }
     }
+    const firstReal = def.stages.findIndex((s) => !s.training);
+    if (firstReal < 0) say("has only training stages");
+    else if (def.stages.slice(firstReal).some((s) => s.training)) say("has a training stage after a real one");
     // Walk the stages from the first: any not visited can never be played.
     const reached = new Set<string>();
     for (let stage: StageDef | undefined = def.stages[0]; stage && !reached.has(stage.id); ) {

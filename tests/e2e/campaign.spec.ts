@@ -96,7 +96,11 @@ test("campaign: a recon and a defence, taken from briefings at base", async ({ p
   expect(await stage(page)).toBe("wave-1");
 
   // A mission in progress survives a reload: the stage starts again with its squad.
-  await page.evaluate(() => window.__game!.world.pause());
+  // Saves are queued: wait for them before reloading, as World.reload does.
+  await page.evaluate(() => {
+    window.__game!.world.pause();
+    return window.__game!.world.store.flush();
+  });
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   await startGame(page);
@@ -271,7 +275,11 @@ test("campaign: an escort that walks when the player is near, waits when not, an
   await moveEngineer(-620, 1220);
   await goTo(page, -640, 1215);
   await page.waitForFunction(() => window.__game!.world.mission?.state.stage === "leg-2", undefined, { timeout: 60_000 });
-  await page.evaluate(() => window.__game!.world.pause());
+  // Saves are queued: wait for them before reloading, as World.reload does.
+  await page.evaluate(() => {
+    window.__game!.world.pause();
+    return window.__game!.world.store.flush();
+  });
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   await startGame(page);
@@ -419,7 +427,11 @@ test("contracts: work from the war's state, taken from the board at a base; and 
   await page.getByRole("button", { name: "Close" }).click();
 
   // A contract in progress survives a reload.
-  await page.evaluate(() => window.__game!.world.pause());
+  // Saves are queued: wait for them before reloading, as World.reload does.
+  await page.evaluate(() => {
+    window.__game!.world.pause();
+    return window.__game!.world.store.flush();
+  });
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready === true, undefined, { timeout: 60_000 });
   await startGame(page);

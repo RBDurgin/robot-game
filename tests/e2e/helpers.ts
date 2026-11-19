@@ -14,10 +14,14 @@ export async function boot(page: Page, url = "/"): Promise<string[]> {
   return errors;
 }
 
-/** Dismiss the start screen so the simulation runs. */
-export async function startGame(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Deploy" }).click();
+/**
+ * Dismiss the start screen so the simulation runs. A new pilot's first mission opens with
+ * training stages; they are skipped unless `training` is set.
+ */
+export async function startGame(page: Page, { training = false } = {}): Promise<void> {
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
   await page.waitForFunction(() => window.__game!.world.mode === "playing");
+  if (!training) await page.evaluate(() => window.__game!.world.skipTraining());
 }
 
 /** Wait for a number of simulation ticks (software rendering makes wall-clock time unreliable). */

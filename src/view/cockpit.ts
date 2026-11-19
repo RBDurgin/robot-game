@@ -1,5 +1,5 @@
-import { Camera, Color3, DynamicTexture, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode } from "@babylonjs/core";
-import { BLIP_COLORS, RADAR_RANGE, sectionColor, type HudState } from "./hud/hud";
+import { Camera, Color3, DynamicTexture, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode } from "../babylon";
+import { blipColor, RADAR_RANGE, sectionColor, type HudState } from "./hud/hud";
 import type { PartMaterials } from "./parts/proceduralParts";
 
 /** Drawn after the world with the depth buffer cleared, so terrain and mechs never poke through. */
@@ -230,7 +230,7 @@ export class Cockpit {
     for (const b of state.radar) {
       const d = Math.hypot(b.x, b.z);
       const k = (Math.min(d, range) / range) * r / Math.max(d, 0.001);
-      c.fillStyle = BLIP_COLORS[b.kind];
+      c.fillStyle = blipColor(b.kind);
       c.globalAlpha = d > range ? 0.5 : 1;
       c.fillRect(cx + b.x * k - 3, cy - b.z * k - 3, 6, 6);
     }

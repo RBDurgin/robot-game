@@ -1,4 +1,4 @@
-import { Color3, Color4, Mesh, MeshBuilder, PhysicsAggregate, PhysicsShapeType, Scene, StandardMaterial } from "@babylonjs/core";
+import { Color3, Color4, Mesh, MeshBuilder, PhysicsAggregate, PhysicsShapeType, Scene, StandardMaterial } from "../babylon";
 import { SITE_MATERIALS, siteBlocks, type SiteMaterial } from "../data/siteLayouts";
 import { addStaticCollider } from "../game/physics";
 import { castsShadow } from "./graphics";

@@ -1,3 +1,5 @@
+import type { ActionId } from "./controls";
+
 /**
  * Gamepad layout and feel, for a controller in the browser's "standard" mapping (Xbox and
  * PlayStation pads both report it). Button numbers are the standard ones.
@@ -34,18 +36,18 @@ export const PAD_HELD = {
 } as const satisfies Record<string, PadButton>;
 
 /**
- * One-shot buttons in play, each standing in for a key (by KeyboardEvent.code), so they run
- * exactly what that key does. L3 (sprint) is handled separately: it toggles.
+ * One-shot buttons in play, each running a keyboard action (src/data/controls.ts), so they do
+ * exactly what that action's key does. L3 (sprint) is handled separately: it toggles.
  */
-export const PAD_PRESS: Partial<Record<PadButton, string>> = {
-  y: "KeyV",
-  x: "KeyH",
-  up: "KeyB",
-  right: "KeyC",
-  down: "KeyG",
-  left: "KeyL",
-  back: "KeyM",
-  start: "KeyP",
+export const PAD_PRESS: Partial<Record<PadButton, ActionId>> = {
+  y: "view",
+  x: "hangar",
+  up: "briefing",
+  right: "contracts",
+  down: "wing",
+  left: "log",
+  back: "map",
+  start: "pause",
 };
 
 export const PAD_FEEL = {

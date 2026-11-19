@@ -11,7 +11,9 @@ import {
   nextMission,
   objectiveText,
   parseMissionState,
+  inTraining,
   resumeMission,
+  skipTraining,
   startMission,
   stepMission,
   type Action,
@@ -325,6 +327,9 @@ describe("mission data", () => {
     const first = nextMission(MISSIONS, [])!;
     expect(first.auto).toBe(true);
     expect(awaitedSites(first, startMission(first).state)).toEqual([WORLD.missionOutpost]);
+    // It teaches the controls first, and the outpost waits for the player meanwhile.
+    expect(first.stages[0]!.training).toBe(true);
+    expect(startMission(first, true).state.stage).toBe("assault");
   });
 
   it("is checked: the validator finds each kind of mistake", () => {
@@ -384,5 +389,41 @@ describe("mission data", () => {
       'test: stage "a": squad "wave" has fewer than 3 pilots',
       'test: stage "a": no squad is tagged "ghosts"',
     ]);
+  });
+});
+
+describe("training stages", () => {
+  const def = mission([
+    { id: "walk", training: true, objective: "Walk: {left} more", goals: [{ when: "did", act: "move", count: 3 }] },
+    { id: "jets", training: true, objective: "Jets", goals: [{ when: "did", act: "jets" }] },
+    { id: "fight", objective: "Fight", goals: [{ when: "elapsed", seconds: 1 }] },
+  ]);
+
+  it("counts what the player does, and only that", () => {
+    const facts = world();
+    const { state } = startMission(def);
+    missionEvent(def, state, { type: "playerDid", act: "move" });
+    missionEvent(def, state, { type: "playerDid", act: "jump" });
+    expect(objectiveText(def, state, facts)).toBe("Walk: 2 more");
+    missionEvent(def, state, { type: "playerDid", act: "move" });
+    missionEvent(def, state, { type: "playerDid", act: "move" });
+    expect(stepMission(def, state, 0.1, facts)).toContainEqual({ do: "stage", stage: "jets" });
+    expect(inTraining(def, state)).toBe(true);
+  });
+
+  it("can be skipped at the start, or part way through", () => {
+    expect(startMission(def, true).state.stage).toBe("fight");
+    const { state } = startMission(def);
+    expect(skipTraining(def, state)).toContainEqual({ do: "stage", stage: "fight" });
+    expect(inTraining(def, state)).toBe(false);
+    expect(skipTraining(def, state)).toEqual([]);
+  });
+
+  it("must come before every real stage", () => {
+    const bad = mission([
+      { id: "a", objective: "A", goals: [{ when: "elapsed", seconds: 1 }] },
+      { id: "b", training: true, objective: "B", goals: [{ when: "did", act: "jets" }] },
+    ]);
+    expect(missionProblems([bad], { sites: new Set(), factions: new Set() })).toContain("test: has a training stage after a real one");
   });
 });

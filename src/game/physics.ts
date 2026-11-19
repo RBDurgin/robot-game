@@ -11,8 +11,7 @@ import {
   Vector3,
   type Mesh,
   type PhysicsShape,
-} from "@babylonjs/core";
-import HavokPhysics from "@babylonjs/havok";
+} from "../babylon";
 import havokWasmUrl from "@babylonjs/havok/lib/esm/HavokPhysics.wasm?url";
 import { SIM_DT } from "../sim/clock";
 import { GRAVITY_ACCEL } from "../sim/mech";
@@ -76,6 +75,8 @@ const plugins = new WeakMap<Scene, HavokPlugin>();
  * Physics is stepped manually from the fixed-step game loop, not by Babylon's render loop.
  */
 export async function enablePhysics(scene: Scene): Promise<HavokPlugin> {
+  // Loaded on demand so the physics engine is its own chunk, fetched alongside the wasm.
+  const { default: HavokPhysics } = await import("@babylonjs/havok");
   const havok = await HavokPhysics({ locateFile: () => havokWasmUrl });
   const plugin = new HavokPlugin(false, havok);
   scene.enablePhysics(GRAVITY, plugin);

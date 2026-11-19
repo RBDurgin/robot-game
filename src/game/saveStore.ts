@@ -5,6 +5,8 @@ export const SLOT_COUNT = 3;
 
 /** Where the game was saved before there were slots. Read once, then left behind. */
 export const LEGACY_KEY = "robot-game-save-v1";
+/** A slot that could not be read is copied to this slot number plus its own before play goes on. */
+export const DAMAGED_SLOT_OFFSET = 100;
 /** Which slot is in use; a small preference, so it stays in localStorage. */
 export const SLOT_KEY = "robot-game-slot";
 
@@ -72,6 +74,11 @@ export const writeSaveFile = (save: SaveData): string => JSON.stringify(save, nu
 export class SaveStore {
   private pending: Promise<void> = Promise.resolve();
   private closed = false;
+  /**
+   * Set by `load` when the slot held something that could not be read: the game starts fresh,
+   * and the old contents are kept in the slot's damaged copy (`damagedCopy`) for the player.
+   */
+  damaged = false;
 
   constructor(
     private readonly backend: Backend,
@@ -104,9 +111,12 @@ export class SaveStore {
    * into the slot the first time, provided every slot is empty.
    */
   async load(): Promise<SaveData> {
+    let raw: string | null = null;
     try {
-      const stored = decode(await this.backend.get(this.slot));
+      raw = await this.backend.get(this.slot);
+      const stored = decode(raw);
       if (stored) return parseSave(stored.save);
+      if (raw) throw new Error("unreadable save");
       const legacy = this.prefs?.getItem(LEGACY_KEY);
       if (legacy && (await this.list()).every((s) => s.summary === null)) {
         const save = parseSave(JSON.parse(legacy));
@@ -115,9 +125,49 @@ export class SaveStore {
         return save;
       }
     } catch {
-      // Private windows and blocked storage land here; play on with defaults.
+      // Private windows and blocked storage land here; play on with defaults. A save that is
+      // there but cannot be read is kept aside first, so starting fresh does not destroy it.
+      if (raw) await this.setAside(raw);
     }
     return freshSave();
+  }
+
+  private async setAside(raw: string): Promise<void> {
+    try {
+      await this.backend.set(DAMAGED_SLOT_OFFSET + this.slot, raw);
+      this.damaged = true;
+    } catch {
+      // Nowhere to keep it.
+    }
+  }
+
+  /** What the slot in use holds, unread: for the player to download when the game cannot start. */
+  async rawSlot(): Promise<string | null> {
+    try {
+      return await this.backend.get(this.slot);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The copy `load` kept of an unreadable save in the slot in use, if any. */
+  async damagedCopy(): Promise<string | null> {
+    try {
+      return await this.backend.get(DAMAGED_SLOT_OFFSET + this.slot);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The game cannot start from the slot in use: keep a copy of it aside, then empty it so the
+   * next start is a fresh game.
+   */
+  async startOver(): Promise<void> {
+    const raw = await this.rawSlot();
+    if (raw) await this.setAside(raw);
+    this.clear();
+    await this.close();
   }
 
   private encode(save: SaveData): string {

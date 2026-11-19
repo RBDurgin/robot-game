@@ -12,6 +12,8 @@ import { parseStanding, startingStanding, type Standing } from "../sim/reputatio
 import { frameUnlocked, isUnlockId, mountUnlocked, unlocksUsed } from "../sim/unlocks";
 import type { UnlockId } from "../data/unlocks";
 import type { WarState } from "../sim/war";
+import { isHudColors, type HudColors } from "../data/hudColors";
+import { defaultBindings, parseBindings, type Bindings } from "./bindings";
 
 export interface Settings {
   /** Radians of look per pixel of mouse travel. */
@@ -21,7 +23,21 @@ export interface Settings {
   /** Graphics preset (src/data/quality.ts). */
   quality: QualityLevel;
   defaultView: "third" | "cockpit";
+  /** Keys and mouse buttons for each action. */
+  bindings: Bindings;
+  /** Sprint toggles on a press instead of lasting while the key is held. */
+  sprintToggle: boolean;
+  /** 0..1: how much the camera shakes from hits, landings and explosions. */
+  shake: number;
+  /** Size of HUD and menu text, 1 for normal. */
+  textScale: TextScale;
+  /** HUD and marker colours; "distinct" tells friend from foe without red against green. */
+  hudColors: HudColors;
 }
+
+export const TEXT_SCALES = [1, 1.2, 1.4] as const;
+export type TextScale = (typeof TEXT_SCALES)[number];
+
 
 /**
  * The save format's version. Saves from before versions were written count as 1, whatever phase
@@ -84,7 +100,20 @@ export interface SavedPosition {
   yaw: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { sensitivity: 0.0022, volume: 0.6, defaultView: "third", quality: DEFAULT_QUALITY };
+export const DEFAULT_SETTINGS: Readonly<Settings> = {
+  sensitivity: 0.0022,
+  volume: 0.6,
+  defaultView: "third",
+  quality: DEFAULT_QUALITY,
+  bindings: defaultBindings(),
+  sprintToggle: false,
+  shake: 1,
+  textScale: 1,
+  hudColors: "standard",
+};
+
+/** A fresh copy of the default settings (the bindings are not shared). */
+export const defaultSettings = (): Settings => ({ ...DEFAULT_SETTINGS, bindings: defaultBindings() });
 
 export function freshSave(): SaveData {
   const inventory: Inventory = [];
@@ -95,7 +124,7 @@ export function freshSave(): SaveData {
     inventory,
     scrap: 0,
     unlocks: [],
-    settings: { ...DEFAULT_SETTINGS },
+    settings: defaultSettings(),
     position: null,
     discovered: [],
     held: [],
@@ -228,6 +257,13 @@ export function parseSave(raw: unknown): SaveData {
     if (s.defaultView === "third" || s.defaultView === "cockpit") save.settings.defaultView = s.defaultView;
     // Saves from before phase 7 have no quality setting and take the default.
     if (isQualityLevel(s.quality)) save.settings.quality = s.quality;
+    // Phase 8 added controls and accessibility; older saves take the defaults.
+    save.settings.bindings = parseBindings(s.bindings);
+    if (typeof s.sprintToggle === "boolean") save.settings.sprintToggle = s.sprintToggle;
+    if (typeof s.shake === "number" && Number.isFinite(s.shake)) save.settings.shake = Math.min(1, Math.max(0, s.shake));
+    const scale = TEXT_SCALES.find((t) => t === s.textScale);
+    if (scale) save.settings.textScale = scale;
+    if (isHudColors(s.hudColors)) save.settings.hudColors = s.hudColors;
   }
   // Saves from before the open world have none of these: the player starts at home with
   // nothing found. Ids are checked against the world when they are used.
