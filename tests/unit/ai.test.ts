@@ -176,6 +176,22 @@ describe("thinkAi", () => {
     expect(intent.aimYaw).toBeCloseTo(0, 0);
   });
 
+  it("a wingman joins in at once when its leader is under attack, even without line of sight", () => {
+    const leader = { x: 8, y: 0, z: 0 };
+    const unseen = target(200, false);
+    const waiting = createAiState();
+    run(waiting, baseView({ follow: leader, target: unseen }), 2);
+    expect(waiting.mode).toBe("patrol");
+    const called = createAiState();
+    const intent = run(called, baseView({ follow: leader, target: unseen, leaderThreatened: true }), 0.1);
+    expect(called.mode).toBe("engage");
+    expect(intent.moveZ).toBe(1); // closes in to find the enemy
+    // Only a wingman answers: a pilot following nobody waits to see the enemy.
+    const loner = createAiState();
+    run(loner, baseView({ target: unseen, leaderThreatened: true }), 2);
+    expect(loner.mode).toBe("patrol");
+  });
+
   it("forgets an alarm when there is nobody to fight", () => {
     const ai = createAiState();
     ai.alerted = true;

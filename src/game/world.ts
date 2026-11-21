@@ -519,7 +519,7 @@ export class World {
   }
 
   private releaseWingmen(): void {
-    for (const mech of this.wingmen) if (mech.brain) mech.brain.follow = null;
+    for (const mech of this.wingmen) if (mech.brain) (mech.brain.follow = null), (mech.brain.leaderThreatened = false);
     this.wingmen.clear();
   }
 
@@ -1689,6 +1689,17 @@ export class World {
       fighting.map((m) => ({ pilot: m, distance: m.brain!.targetDistance, holding: this.attackers.has(m) })),
       ENEMY_TUNING.maxAttackers,
     );
+
+    // Wingmen join a fight as soon as an enemy near the player is hunting the player or one of
+    // them, without waiting to see it themselves (ruins and ridges hide raiders until they are close).
+    if (this.wingmen.size > 0) {
+      const p = this.player.feet;
+      const threatened = this.mechs.some((m) => {
+        const t = m.brain?.target;
+        return m.alive && t && m.brain!.state.mode !== "patrol" && (t === this.player || this.wingmen.has(t)) && Vector3.Distance(m.feet, p) < RALLY_RANGE;
+      });
+      for (const mech of this.wingmen) if (mech.brain) mech.brain.leaderThreatened = threatened;
+    }
 
     for (const mech of this.mechs) {
       if (!mech.brain || !mech.alive) continue;

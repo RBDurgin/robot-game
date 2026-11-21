@@ -23,6 +23,8 @@ export class AiController {
   target: MechEntity | null = null;
   /** Wingmen: the mech to stay close to when there is nothing to fight. */
   follow: MechEntity | null = null;
+  /** Wingmen: set by the world while an enemy near the leader is hunting the leader or the flight. */
+  leaderThreatened = false;
   /** Set for suits a mission has under escort: see `AiView`. */
   passive = false;
   oneWay = false;
@@ -108,6 +110,7 @@ export class AiController {
         blockedAhead: this.blockedAhead,
         fireBlocked: this.fireBlocked,
         follow: this.follow?.alive ? this.follow.feet : null,
+        leaderThreatened: this.follow?.alive === true && this.leaderThreatened,
         patrol: this.patrol,
         home: this.home,
         passive: this.passive,

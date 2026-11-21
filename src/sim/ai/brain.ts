@@ -111,6 +111,8 @@ export interface AiView {
   fireBlocked?: boolean;
   /** Wingmen: where the pilot they are escorting stands. Followed whenever there is nothing to fight. */
   follow?: Vec3 | null;
+  /** Wingmen: an enemy near the leader is hunting the leader or the flight. Joins in at once, as if alerted. */
+  leaderThreatened?: boolean;
   patrol: Vec3[];
   home: Vec3;
   /** Never fights: keeps to its route whatever is shooting at it. */
@@ -174,9 +176,11 @@ export function thinkAi(ai: AiState, view: AiView, cfg: AiConfig, dt: number, rn
   // --- Mode transitions ---
   if (ai.mode === "patrol") {
     const spotted = target !== null && target.visible && targetDist < cfg.detectRange;
-    if (target && (spotted || ai.alerted)) {
+    // A wingman does not wait to see the enemy itself once its leader is under attack.
+    const called = ai.alerted || (view.follow != null && view.leaderThreatened === true);
+    if (target && (spotted || called)) {
       ai.reactionTimer += dt;
-      if (ai.reactionTimer >= cfg.reaction || ai.alerted) {
+      if (ai.reactionTimer >= cfg.reaction || called) {
         ai.mode = "engage";
         ai.unseenTimer = 0;
         ai.burstTimer = 0.3 + rng() * 0.5;
