@@ -59,6 +59,10 @@ Last, because it polishes what exists. Parts of it (key rebinding, quality setti
   `STREAM.wakeRevealPerFrame` (8) per frame, spreading the first-draw cost over about six frames.
   No throwaway shader any more (checked headless). Also seen on High: with five mechs in a fight
   the scene render takes 14 to 19 ms of JavaScript, against 6 on Medium.
+- Step 1, checked (trace 2026-11-20, High, 60 s with five wakes and a five-mech fight): 60.0 fps,
+  0.1% slow frames (0.7% before), p99 17.7 ms. Every wake now stays under 18 ms. The three slow
+  frames had light JavaScript and GPU time (the cost was outside the page). The scene render in
+  a fight averages 7.2 ms (13.4 at most), well within a frame.
 - Step 3 (rebinding). Actions and default keys are data (`src/data/controls.ts`); the player's
   bindings are `settings.bindings` (`src/game/bindings.ts`: up to two keys per action, mouse
   buttons as `Mouse0`..`Mouse4`, taking a key from another action swaps them). The pause screen
@@ -118,7 +122,7 @@ New content or systems.
 ## Checklist
 
 - [x] Audience and hosting decided
-- [ ] Performance pass and quality presets
+- [x] Performance pass and quality presets
 - [x] Bundle split
 - [x] Key rebinding
 - [x] Accessibility options
