@@ -16,11 +16,20 @@ test("keys can be rebound, and the new key does the job", async ({ page }) => {
   await page.getByRole("button", { name: /^Melee strike: F/ }).click();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: /^Melee strike: F/ })).toBeVisible();
+  // A click away from the waiting button cancels too: it must not bind the left mouse button.
+  await page.getByRole("button", { name: /^Pause: P/ }).click();
+  await page.mouse.click(4, 4);
+  await expect(page.locator("button.key.listening")).toHaveCount(0);
+  // A mouse button is bound by pressing it on the waiting button itself.
+  await page.getByRole("button", { name: /^Pause: none/ }).click();
+  await page.locator("button.key.listening").click({ button: "middle" });
   await page.screenshot({ path: `${SHOTS}/settings-controls.png` });
 
   const saved = await page.evaluate(() => window.__game!.world.save.settings.bindings);
   expect(saved.jump).toEqual(["KeyQ"]);
   expect(saved.boost).toEqual(["KeyJ"]);
+  expect(saved.pause).toEqual(["KeyP", "Mouse1"]);
+  expect(saved.fireTertiary).toEqual(["KeyE"]);
 
   await startGame(page);
   const intent = () => page.evaluate(() => window.__game!.world.input.buildIntent(null));

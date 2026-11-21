@@ -61,10 +61,13 @@ function captureKey(owner: HTMLElement, done: (code: string | null) => void): vo
     if (RESERVED_KEYS.includes(e.code)) return;
     finish(e.code);
   };
+  // Only a press on the waiting button itself binds a mouse button. A click anywhere else (on
+  // Resume, say) cancels, or it would quietly bind the left button to this action.
   const onMouse = (e: MouseEvent): void => {
     e.preventDefault();
     e.stopImmediatePropagation();
-    finish(owner.isConnected ? `Mouse${e.button}` : null);
+    const onOwner = e.target instanceof Node && owner.contains(e.target);
+    finish(owner.isConnected && onOwner ? `Mouse${e.button}` : null);
   };
   const onMenu = (e: MouseEvent): void => e.preventDefault();
   // At once: the press that asked for this has already been handled (a click's mousedown, or
@@ -420,7 +423,7 @@ export class Screens {
           ]
         : []),
       el("h2", "", ["Controls"]),
-      el("p", "dim", ["Click a key to change it, then press the new key or mouse button. Delete clears it, Esc cancels."]),
+      el("p", "dim", ["Click a key to change it, then press the new key, or click it again with the mouse button you want. Delete clears it; Esc or a click elsewhere cancels."]),
       controls,
       el("div", "actions", [resetControls]),
       el("h2", "", ["Gamepad"]),
