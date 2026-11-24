@@ -25,6 +25,11 @@ export function castsShadow(mesh: AbstractMesh): void {
   mesh.metadata = { ...(mesh.metadata as object | null), castsShadow: true };
 }
 
+/** Mark a part of a mech that must not cast a shadow (light beams, glows). */
+export function noShadow(mesh: AbstractMesh): void {
+  mesh.metadata = { ...(mesh.metadata as object | null), noShadow: true };
+}
+
 /**
  * Lighting and screen effects that depend on the quality setting: sun shadows around the player,
  * post-processing, glow, and the mech surface detail. Each part can be switched off on its own.
@@ -132,7 +137,7 @@ export class Graphics {
     };
     for (const mech of mechs) {
       for (const mesh of mech.visual.root.getChildMeshes(false)) {
-        if (!mesh.isVisible || !mesh.isEnabled() || !near(mesh)) continue;
+        if (!mesh.isVisible || !mesh.isEnabled() || !near(mesh) || (mesh.metadata as { noShadow?: boolean } | null)?.noShadow) continue;
         mesh.receiveShadows = true;
         list.push(mesh);
       }

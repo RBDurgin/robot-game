@@ -25,12 +25,14 @@ export { Mesh } from "@babylonjs/core/Meshes/mesh";
 export { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 export { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 export { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
+export { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 
 export { Camera } from "@babylonjs/core/Cameras/camera";
 export { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 
 export { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 export { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
+export { SpotLight } from "@babylonjs/core/Lights/spotLight";
 export { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
 
 export { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";

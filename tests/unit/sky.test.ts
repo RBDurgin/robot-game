@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DAY_PHASES, SKY } from "../../src/data/sky";
-import { dayPhase, freshSkyClock, parseSkyClock, parseTime, skipTo, skyAt, timeOfDay } from "../../src/sim/sky";
+import { LIGHTS } from "../../src/data/lights";
+import { DAY_PHASES, SKY, TIME_NAMES } from "../../src/data/sky";
+import { darkness, dayPhase, freshSkyClock, lampsWanted, parseSkyClock, parseTime, skipTo, skyAt, timeOfDay } from "../../src/sim/sky";
 
 describe("sky clock", () => {
   it("starts a new game in the morning and turns over once a day", () => {
@@ -90,5 +91,32 @@ describe("sky light", () => {
       expect(skyAt(t).sun).toBeLessThanOrEqual(skyAt(t - 0.01).sun);
       expect(skyAt(t).sun).toBeLessThanOrEqual(skyAt(t + 0.01).sun);
     }
+  });
+});
+
+describe("lamps after dark", () => {
+  it("AI lamps are off by day and on at night, dusk and dawn", () => {
+    expect(lampsWanted(skyAt(0.5))).toBe(false);
+    expect(lampsWanted(skyAt(0.3))).toBe(false);
+    expect(lampsWanted(skyAt(0))).toBe(true);
+    expect(lampsWanted(skyAt(TIME_NAMES.dusk))).toBe(true);
+    expect(lampsWanted(skyAt(DAY_PHASES.dawn))).toBe(true);
+  });
+
+  it("darkness runs from 0 in daylight to 1 at night", () => {
+    expect(darkness(skyAt(0.5))).toBe(0);
+    expect(darkness(skyAt(0))).toBe(1);
+    const dusk = darkness(skyAt(TIME_NAMES.dusk));
+    expect(dusk).toBeGreaterThan(0);
+    expect(dusk).toBeLessThan(1);
+    for (let t = 0; t < 1; t += 0.01) {
+      const d = darkness(skyAt(t));
+      expect(d).toBeGreaterThanOrEqual(0);
+      expect(d).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("the headlight hint comes later in the evening than AI lamps", () => {
+    expect(LIGHTS.hintBelow).toBeLessThan(LIGHTS.lampsBelow);
   });
 });

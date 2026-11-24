@@ -1,4 +1,5 @@
 import { Camera, Color3, DynamicTexture, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode } from "../babylon";
+import { LIGHTS } from "../data/lights";
 import { blipColor, RADAR_RANGE, sectionColor, type HudState } from "./hud/hud";
 import type { PartMaterials } from "./parts/proceduralParts";
 
@@ -32,6 +33,9 @@ export class Cockpit {
   private age = REDRAW;
   /** Starts true so the constructor's setVisible(false) does hide it. */
   private visible = true;
+  /** The cockpit's own copies of the part materials, so its night glow leaves the mech alone. */
+  private readonly lit: StandardMaterial[];
+  private glow = -1;
 
   constructor(
     private readonly scene: Scene,
@@ -41,9 +45,10 @@ export class Cockpit {
     this.root = new TransformNode("cockpit", scene);
     this.root.parent = camera;
 
-    const frame = mats.dark;
-    const trim = mats.metal;
-    const panel = mats.secondary;
+    const frame = mats.dark.clone("cockpitFrame");
+    const trim = mats.metal.clone("cockpitTrim");
+    const panel = mats.secondary.clone("cockpitPanel");
+    this.lit = [frame, trim, panel];
     // Dashboard: a slab under the view, its top sloping toward the pilot.
     const dash = this.node("dash", 0, -0.47, 0.98, -0.42);
     this.box("dashTop", dash, [2.6, 0.06, 0.62], [0, 0, 0], panel);
@@ -94,6 +99,16 @@ export class Cockpit {
     this.visible = visible;
     this.root.setEnabled(visible);
     if (visible) this.age = REDRAW;
+  }
+
+  /** After dark the instruments light the cockpit: 0 in daylight, 1 at night. */
+  setGlow(darkness: number): void {
+    const k = Math.round(darkness * 50) / 50;
+    if (k === this.glow) return;
+    this.glow = k;
+    const [r, g, b] = LIGHTS.cockpitGlow.color;
+    const s = LIGHTS.cockpitGlow.strength * k;
+    for (const m of this.lit) m.emissiveColor.set(r * s, g * s, b * s);
   }
 
   /** Redraw the instruments from the HUD's state, a few times a second. */

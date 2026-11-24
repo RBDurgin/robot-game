@@ -175,6 +175,10 @@ Key seams:
 - The time of day runs during play (`save.sky`, `src/sim/sky.ts`). The e2e helper `startGame`
   holds it at noon; pass `{ sky: false }` to let it run, and use `world.setTime` to change it.
   Weather and night may only bring the fog in closer, never push it out past a biome's own.
+- The player's headlights are a spot light that always exists (intensity 0 when off). Do not
+  create or enable lights during play: every material would recompile. Lamps on other mechs
+  are meshes, not lights (`src/view/lamps.ts`). Unlit additive materials take their colour from
+  `emissiveColor`; a `disableLighting` material's diffuse colour draws black.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - A procedural part's node names are how models find their joints (`hip_l`, `knee_r`, `pivot`,
   `forearm`, `jet_l`...). Renaming one breaks the models that follow it; `GltfPartVisual` warns.

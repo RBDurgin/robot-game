@@ -48,6 +48,7 @@ export const PAD_PRESS: Partial<Record<PadButton, ActionId>> = {
   left: "log",
   back: "map",
   start: "pause",
+  r3: "lights",
 };
 
 export const PAD_FEEL = {
@@ -75,6 +76,7 @@ export const PAD_CONTROLS: [string, string][] = [
   ["RB", "Fire shoulder weapons"],
   ["B", "Melee strike"],
   ["Y", "Switch view"],
+  ["Right stick click", "Headlights"],
   ["X", "Hangar"],
   ["D-pad", "Briefing ↑ · Contracts → · Wingmen ↓ · Log ←"],
   ["View / Back", "World map"],

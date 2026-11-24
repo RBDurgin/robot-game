@@ -66,6 +66,19 @@ makes the open world worth roaming.
   `dawn`, `morning`, or a fraction of a day) sets the time and holds it;
   `__game.world.setTime("night")` does the same from the console, and `world.skyPaused` stops
   the clock. The e2e helper `startGame` holds every test at noon unless it passes `sky: false`.
+- Step 2 (night). The player's headlights are one spot light (`headlight`) made in
+  `World.create` before any material, so every shader is compiled with it; off is intensity 0,
+  and switching on recompiles nothing. It shines from the chest along the aim. The `lights`
+  action (T, right-stick click) toggles it; `World.headlightsOn` holds the choice across refits
+  and `MechEntity.lights` says whether a mech's lamps are on (for the visibility rules of step 4).
+  Every mech has two lamps beside the canopy (`src/view/lamps.ts`): dark lenses, which light
+  up with a camera-facing flare and a faint additive beam. These are not lights, so any number
+  are cheap. AI pilots switch theirs on when the daylight drops below `LIGHTS.lampsBelow`
+  (dusk to dawn). The HUD suggests the headlights once it is properly dark. The cockpit has its
+  own copies of the part materials and glows blue-grey from its instruments after dark. Tuning
+  is in `src/data/lights.ts`. With post-processing (Medium, High) additive light blends in
+  linear space, so beams look several times stronger than their alpha; they are tuned for
+  Medium and are fainter on Low.
 
 ## Out of scope
 
@@ -100,7 +113,7 @@ Seasons, temperature affecting heat, a thermal vision mode, real lights on every
 
 - [x] Decisions settled
 - [x] Sky clock, lights, fog tint, sky dome
-- [ ] Night: headlights and lamps
+- [x] Night: headlights and lamps
 - [ ] Storm fronts
 - [ ] Visibility rules
 - [ ] Convoys

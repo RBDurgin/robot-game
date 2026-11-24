@@ -58,6 +58,8 @@ export class MechEntity {
   /** Guided-missile lock on another mech. */
   readonly lock: LockState<MechEntity> = createLock();
   meleeCooldown = 0;
+  /** Lamps (the player's headlights) on: lights the way, and shows where the mech is. */
+  lights = false;
   /** Multiplier on damage this mech deals. */
   damageScale: number;
   /** Armor multiplier applied on top of the fitted plating (enemy tuning). */
@@ -237,6 +239,7 @@ export class MechEntity {
   /** Update the visual, interpolating between the last two simulation steps. */
   renderUpdate(alpha: number, frameDt: number): void {
     Vector3.LerpToRef(this.prevFeet, this.feet, alpha, this.renderFeet);
+    this.visual.setLamps(this.lights && this.alive);
     const s = this.state;
     this.visual.update(
       {

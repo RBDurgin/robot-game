@@ -1,3 +1,4 @@
+import { LIGHTS } from "../data/lights";
 import { DAY_PHASES, SKY, TIME_NAMES, type RGB, type SkyKey, type TimeName } from "../data/sky";
 
 /**
@@ -117,4 +118,13 @@ export function skyAt(t: number): SkyState {
     stars: mix(a.stars, b.stars, k),
     light: mix(a.light, b.light, k),
   };
+}
+
+/** Whether AI pilots run with their lamps on in this light. */
+export const lampsWanted = (sky: Pick<SkyState, "light">): boolean => sky.light < LIGHTS.lampsBelow;
+
+/** How dark it is for the cockpit's glow and the headlight hint: 0 in daylight, 1 at night. */
+export function darkness(sky: Pick<SkyState, "light">): number {
+  const night = SKY.keys[0]!.light;
+  return Math.min(1, Math.max(0, (1 - sky.light) / (1 - night)));
 }

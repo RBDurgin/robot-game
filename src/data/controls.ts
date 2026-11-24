@@ -17,6 +17,7 @@ export const ACTIONS = {
   fireTertiary: { label: "Fire shoulder weapons", keys: ["KeyE", "Mouse1"] },
   melee: { label: "Melee strike", keys: ["KeyF"] },
   view: { label: "Switch third-person / cockpit view", keys: ["KeyV"] },
+  lights: { label: "Headlights on / off", keys: ["KeyT"] },
   hangar: { label: "Hangar (at a base you or an ally hold)", keys: ["KeyH"] },
   wing: { label: "Call allied pilots to your wing, or release them", keys: ["KeyG"] },
   briefing: { label: "Mission briefing (at a base)", keys: ["KeyB"] },

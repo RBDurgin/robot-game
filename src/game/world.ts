@@ -4,7 +4,7 @@ import { Cockpit } from "../view/cockpit";
 import { getPartMaterials } from "../view/parts/proceduralParts";
 import { preloadModels } from "../view/parts/GltfPartVisual";
 import { downloadText, slotAsSaveFile } from "../view/download";
-import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, Vector3, type AbstractMesh } from "../babylon";
+import { Color3, DirectionalLight, Engine, HemisphericLight, Scene, SpotLight, Vector3, type AbstractMesh } from "../babylon";
 import { BIOMES, BIOME_IDS } from "../data/biomes";
 import { DANGER, ENEMY_TUNING } from "../data/encounters";
 import { cssColor, FACTIONS, isWarFactionId, PLAYER_FACTION, WAR_FACTION_IDS, type WarFactionId } from "../data/factions";
@@ -39,7 +39,8 @@ import { attitudeOf, awardStanding, hostileFactions, recordCapture, recordFriend
 import { buildWarMap, captureByRaid, clearSite, endRaid, parseWar, regionControl, setTroops, settleRaid, siteCounts, stepWar, type Holder, type WarContext, type WarEvent, type WarMap, type WarState } from "../sim/war";
 import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "../sim/terrain";
 import { buildWorldModel } from "../sim/worldgen";
-import { parseTime, skipTo, skyAt, timeOfDay, type SkyState } from "../sim/sky";
+import { darkness, lampsWanted, parseTime, skipTo, skyAt, timeOfDay, type SkyState } from "../sim/sky";
+import { LIGHTS } from "../data/lights";
 import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
 import { isActionId, type ActionId } from "../data/controls";
@@ -176,6 +177,10 @@ export class World {
   private readonly biomeMix = new Float32Array(BIOME_IDS.length);
   private readonly sunLight: DirectionalLight;
   private readonly skyLight: HemisphericLight;
+  /** The player's headlights: made once at start-up and dimmed to nothing when off, so no shader recompiles. */
+  private readonly headlight: SpotLight;
+  /** The player's headlights are on. Kept here, as the player's mech is replaced on a refit. */
+  headlightsOn = false;
   private readonly skyDome: SkyDome;
   private domeOn = true;
 
@@ -197,6 +202,7 @@ export class World {
     this.effects = new Effects(scene);
     this.sunLight = scene.getLightByName("sun") as DirectionalLight;
     this.skyLight = scene.getLightByName("sky") as HemisphericLight;
+    this.headlight = scene.getLightByName("headlight") as SpotLight;
     this.skyDome = new SkyDome(scene);
     // `?time=dusk` (or a fraction of a day) sets the time and stops the clock, for screenshots.
     const time = parseTime(new URLSearchParams(location.search).get("time"));
@@ -283,6 +289,11 @@ export class World {
       this.cameraRig.toggle();
       this.playerDid("view");
     });
+    input.onAction("lights", () => {
+      if (this.mode !== "playing" || !this.player.alive) return;
+      this.headlightsOn = !this.headlightsOn;
+      this.sfx.ui();
+    });
     input.onAction("hangar", () => {
       if (this.mode === "playing" && this.atBase && this.player.alive) this.openHangar();
     });
@@ -336,6 +347,13 @@ export class World {
     sky.groundColor = new Color3(0.35, 0.33, 0.3);
     const sun = new DirectionalLight("sun", new Vector3(-0.45, -1, 0.35), scene);
     sun.intensity = 0.95;
+    // Made before any material, so every one is compiled with it; off is intensity 0.
+    const h = LIGHTS.headlight;
+    const headlight = new SpotLight("headlight", Vector3.Zero(), new Vector3(0, 0, 1), h.angle, h.exponent, scene);
+    headlight.diffuse = new Color3(...LIGHTS.color);
+    headlight.specular = headlight.diffuse.scale(0.5);
+    headlight.range = h.range;
+    headlight.intensity = 0;
 
     const store = await openSaveStore();
     const save = await store.load();
@@ -1465,6 +1483,24 @@ export class World {
     this.updateSky();
   }
 
+  /** The headlights shine from the player's chest along the aim, while they are on. */
+  private updateHeadlight(): void {
+    const light = this.headlight;
+    const p = this.player;
+    const on = this.headlightsOn && p.alive;
+    light.intensity = on ? LIGHTS.headlight.intensity : 0;
+    if (!on) return;
+    const h = LIGHTS.headlight;
+    const s = p.state;
+    const at = p.renderPosition;
+    const ahead = p.frame.height * h.forward;
+    const sy = Math.sin(s.torsoYaw);
+    const cy = Math.cos(s.torsoYaw);
+    light.position.set(at.x + sy * ahead, at.y + p.frame.height * h.height, at.z + cy * ahead);
+    const pitch = s.torsoPitch * h.followPitch - h.dip;
+    light.direction.set(sy * Math.cos(pitch), Math.sin(pitch), cy * Math.cos(pitch));
+  }
+
   /** The lights follow the time of day. */
   private updateSky(): void {
     const s = (this.sky = skyAt(timeOfDay(this.save.sky)));
@@ -1853,6 +1889,8 @@ export class World {
     if (charges > 1) lines.push(`Dash ${"●".repeat(p.state.boostCharges)}${"○".repeat(charges - p.state.boostCharges)}`);
     if (p.state.braced) lines.push("BRACED");
     const k = (action: ActionId): string => this.input.keyName(action);
+    if (this.headlightsOn) lines.push(`Press ${k("lights")}: headlights off`);
+    else if (this.sky.light < LIGHTS.hintBelow) lines.push(`Press ${k("lights")}: headlights`);
     lines.push(`Scrap ${this.save.scrap}`);
     lines.push(`${this.region.name} (${this.regionHolder()}) · ${k("map")}: map`);
     if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · ${k("wing")}: release`);
@@ -1886,11 +1924,14 @@ export class World {
     this.updateSky();
     this.updateFog(playing ? frameDt : 0);
     let t = perfStart();
+    const lamps = lampsWanted(this.sky);
     for (const mech of this.mechs) {
+      mech.lights = mech === this.player ? this.headlightsOn : lamps;
       mech.renderUpdate(playing ? alpha : 1, playing ? frameDt : 0);
       if (playing && mech.alive && mech.visual.thrust > 0.05) for (const at of mech.visual.jetPoints()) this.effects.particles.exhaust(at, mech.visual.thrust);
     }
     this.cameraRig.update(this.player, this.input.yaw, this.input.pitch, frameDt);
+    this.updateHeadlight();
     if (playing) {
       this.effects.update(frameDt);
       this.salvage.update(frameDt);
@@ -1952,6 +1993,7 @@ export class World {
     };
     this.hud.update(hudState);
     this.cockpit.setVisible(this.cameraRig.mode === "cockpit" && !this.cameraRig.showcase && this.player.alive);
+    this.cockpit.setGlow(darkness(this.sky));
     this.cockpit.update(hudState, frameDt);
     perfEnd("hud", t);
     t = perfStart();

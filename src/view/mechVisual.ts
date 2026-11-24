@@ -2,6 +2,7 @@ import { Scene, TransformNode, Vector3 } from "../babylon";
 import type { ColorScheme } from "../data/factions";
 import type { FrameDef, FrameId, HardpointId } from "../data/frames";
 import { MODELS, WEAPON_MODELS, type ModelEntry, type PartSlot } from "../data/models";
+import { MechLamps } from "./lamps";
 import { GltfPartVisual, modelsEnabled } from "./parts/GltfPartVisual";
 import type { PartVisual } from "./parts/PartVisual";
 import {
@@ -63,6 +64,8 @@ export class MechVisual {
   private readonly recoil: Record<ArmSide, number> = { armL: 0, armR: 0 };
   private airborne = 0;
   private crouch = 0;
+  /** Lamps beside the canopy, lit after dark. */
+  private readonly lamps: MechLamps;
   /** Thruster level from the last update, 0..1. */
   thrust = 0;
   /** Imported models still loading. */
@@ -107,6 +110,13 @@ export class MechVisual {
     };
     this.arms.armL.root.parent = this.torso.attachment("shoulder_l");
     this.arms.armR.root.parent = this.torso.attachment("shoulder_r");
+
+    this.lamps = new MechLamps(scene, this.torso.attachment("cockpit") ?? this.torso.root, look.bulk, 0.6 + 0.4 * look.bulk);
+  }
+
+  /** Switch the lamps on or off. */
+  setLamps(on: boolean): void {
+    this.lamps.set(on);
   }
 
   /** Fit (or remove, with null) the weapon model on one hardpoint. */
@@ -167,6 +177,7 @@ export class MechVisual {
     this.crouch += ((input.braced ? 1 : 0) - this.crouch) * Math.min(1, dt * 7);
     this.legs.setPose({ walkPhase: input.walkPhase, stride, airborne: this.airborne, crouch: this.crouch });
     for (const pivot of Object.values(this.shoulderPivots)) pivot.rotation.x = -input.torsoPitch;
+    this.lamps.pitch(input.torsoPitch);
 
     for (const side of ["armL", "armR"] as const) {
       this.recoil[side] = Math.max(0, this.recoil[side] - dt * 6);
