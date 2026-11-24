@@ -9,6 +9,7 @@ import { isPlatingId, isWeaponId } from "../sim/loadout";
 import { contractDef, contractId, parseContract, type ContractSpec } from "../sim/contracts";
 import { parseMissionState, type MissionState } from "../sim/mission";
 import { parseStanding, startingStanding, type Standing } from "../sim/reputation";
+import { freshSkyClock, parseSkyClock, type SkyClock } from "../sim/sky";
 import { frameUnlocked, isUnlockId, mountUnlocked, unlocksUsed } from "../sim/unlocks";
 import type { UnlockId } from "../data/unlocks";
 import type { WarState } from "../sim/war";
@@ -48,8 +49,9 @@ export type TextScale = (typeof TEXT_SCALES)[number];
  * 3: frames and shoulder mounts have to be unlocked.
  * 4: scripted missions: which are done and how far the one in progress has got.
  * 5: the patron the player chose at the midpoint of the campaign, and the contract in progress.
+ * 6: the time of day.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export interface SaveData {
   version: number;
@@ -83,6 +85,8 @@ export interface SaveData {
   war: WarState | null;
   /** Scripted missions: the ids of those finished, and the one in progress. */
   missions: MissionProgress;
+  /** The time of day, and the play time the weather follows. */
+  sky: SkyClock;
 }
 
 export interface MissionProgress {
@@ -133,6 +137,7 @@ export function freshSave(): SaveData {
     standing: startingStanding(),
     war: null,
     missions: { done: [], active: null, patron: null, contract: null },
+    sky: freshSkyClock(),
   };
 }
 
@@ -200,8 +205,13 @@ function toPatron(data: Record<string, unknown>): void {
   if (data.missions && typeof data.missions === "object") data.missions = { ...data.missions, patron: null, contract: null };
 }
 
+/** Version 5 to 6: there was no time of day. The game picks up in the morning, as a new one does. */
+function toSky(data: Record<string, unknown>): void {
+  data.sky = freshSkyClock();
+}
+
 /** `MIGRATIONS[n]` turns version n data into version n + 1, in place. */
-const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks, 3: toMissions, 4: toPatron };
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => void> = { 1: toItems, 2: toUnlocks, 3: toMissions, 4: toPatron, 5: toSky };
 
 /** A copy of stored data brought up to the current version. */
 export function migrateSave(raw: Record<string, unknown>): Record<string, unknown> {
@@ -289,5 +299,6 @@ export function parseSave(raw: unknown): SaveData {
   const active = parseMissionState(m.active, contract ? [...missions, contractDef(contract)] : missions);
   const working = active !== null && contract !== null && active.id === contractId(contract);
   save.missions = { done, active: active && !done.includes(active.id) ? active : null, patron, contract: working ? contract : null };
+  save.sky = parseSkyClock(data.sky);
   return save;
 }

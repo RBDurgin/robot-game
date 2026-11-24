@@ -17,6 +17,7 @@ The vertical slice (phase 0) is done. The phases below take it to a full game. E
 | 6 | [Story missions](phases/06-story-missions.md) | Scripted missions, dialogue, a short campaign | 4 | 3 to 4 | In progress |
 | 7 | [Assets and presentation](phases/07-assets-and-presentation.md) | Imported models, animation, lighting, audio, gamepad | 2 | 2 to 4, can run alongside | Done |
 | 8 | [Release readiness](phases/08-release-readiness.md) | Performance, accessibility, tutorial, packaging | 6 | 1 to 2 | In progress |
+| 9 | [Living world](phases/09-living-world.md) | Day and night, weather, convoys and supply drops | 4 | 3 to 4 | In progress |
 
 Sizes are rough guesses in working sessions, not commitments.
 
@@ -26,6 +27,7 @@ Sizes are rough guesses in working sessions, not commitments.
 - **2 before 5.** Progression needs frames and weapons worth unlocking.
 - **3 before 4.** Faction territory needs a world larger than one zone.
 - **4 before 6.** Story missions hang off the factions and the state of the war.
+- **9 comes after the campaign** so the sky and the events can be used by missions without rewriting them.
 - **7 is flexible.** It can start any time after phase 2 and run alongside other phases, one part at a time.
 - **2 and 3 are independent of each other.** Recommended order is 2 then 3, because frames are cheaper and make every later playtest more interesting. Swap them if the open world matters more.
 

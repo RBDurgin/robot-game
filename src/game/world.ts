@@ -39,12 +39,14 @@ import { attitudeOf, awardStanding, hostileFactions, recordCapture, recordFriend
 import { buildWarMap, captureByRaid, clearSite, endRaid, parseWar, regionControl, setTroops, settleRaid, siteCounts, stepWar, type Holder, type WarContext, type WarEvent, type WarMap, type WarState } from "../sim/war";
 import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "../sim/terrain";
 import { buildWorldModel } from "../sim/worldgen";
+import { parseTime, skipTo, skyAt, timeOfDay, type SkyState } from "../sim/sky";
 import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
 import { isActionId, type ActionId } from "../data/controls";
 import { Hud, hudPalette, type HudState, type RadarBlip } from "../view/hud/hud";
 import { Screens } from "../view/screens";
 import { PlaceMarker } from "../view/placeMarker";
+import { SkyDome } from "../view/skyDome";
 import { WreckField } from "../view/wreck";
 import { AiController } from "./aiController";
 import { CameraRig } from "./camera/cameraRig";
@@ -63,6 +65,8 @@ const RESPAWN_DELAY = 3.5;
 const POSITION_SAVE_TICKS = 300;
 /** How fast sky and fog follow the biome the player is in, per second. */
 const FOG_RATE = 0.6;
+/** The fill light's colour from below in daylight. */
+const GROUND_LIGHT = [0.35, 0.33, 0.3] as const;
 /** Damage in one hit that counts as a heavy blow for feedback (sound, shake). */
 const HEAVY_HIT = 45;
 /** Colour of the marker over a mech and of its radar blip, by how it regards the player. */
@@ -133,6 +137,10 @@ export class World {
   tick = 0;
   /** Test hook: stops the war's clock, so tests can rely on who holds what. */
   warPaused = false;
+  /** Stops the time of day (tests, screenshots, `?time=`). */
+  skyPaused = false;
+  /** The light and colours of the sky this frame. */
+  sky: SkyState;
   /** Test hook: fields set here replace the player's real input. */
   intentOverride: Partial<Intent> | null = null;
   /** Hostile mech currently under the crosshair. */
@@ -166,6 +174,10 @@ export class World {
   private readonly placeMarker: PlaceMarker;
   private readonly fog = { r: 0, g: 0, b: 0, start: 0, end: 0, set: false };
   private readonly biomeMix = new Float32Array(BIOME_IDS.length);
+  private readonly sunLight: DirectionalLight;
+  private readonly skyLight: HemisphericLight;
+  private readonly skyDome: SkyDome;
+  private domeOn = true;
 
   private constructor(
     readonly scene: Scene,
@@ -183,7 +195,17 @@ export class World {
     this.player = player;
     this.rng = makeRng(model.def.seed);
     this.effects = new Effects(scene);
-    this.graphics = new Graphics(scene, scene.getLightByName("sun") as DirectionalLight, cameraRig.camera, hud.ui);
+    this.sunLight = scene.getLightByName("sun") as DirectionalLight;
+    this.skyLight = scene.getLightByName("sky") as HemisphericLight;
+    this.skyDome = new SkyDome(scene);
+    // `?time=dusk` (or a fraction of a day) sets the time and stops the clock, for screenshots.
+    const time = parseTime(new URLSearchParams(location.search).get("time"));
+    if (time !== null) {
+      skipTo(save.sky, time);
+      this.skyPaused = true;
+    }
+    this.sky = skyAt(timeOfDay(save.sky));
+    this.graphics = new Graphics(scene, this.sunLight, cameraRig.camera, hud.ui);
     this.cockpit = new Cockpit(scene, cameraRig.camera, getPartMaterials(scene, FACTIONS[PLAYER_FACTION].colors));
     this.salvage = new SalvageField(scene);
     this.placeMarker = new PlaceMarker(scene);
@@ -296,6 +318,7 @@ export class World {
       if (this.mode === "playing" && this.started) this.pause();
     });
 
+    this.updateSky();
     this.updateFog(Infinity);
     this.pause();
   }
@@ -1431,7 +1454,32 @@ export class World {
     this.mechs.splice(this.mechs.indexOf(mech), 1);
   }
 
-  /** Sky and fog follow the mix of biomes where the player stands. */
+  /**
+   * Set the time of day: a fraction of a day (0 midnight, 0.5 noon) or a name ("dusk"). The
+   * clock only moves forward, so the weather is unchanged.
+   */
+  setTime(time: number | string): void {
+    const t = parseTime(time);
+    if (t === null) throw new Error(`Not a time of day: ${time}`);
+    skipTo(this.save.sky, t);
+    this.updateSky();
+  }
+
+  /** The lights follow the time of day. */
+  private updateSky(): void {
+    const s = (this.sky = skyAt(timeOfDay(this.save.sky)));
+    const sun = this.sunLight;
+    sun.direction.set(s.lightDir.x, s.lightDir.y, s.lightDir.z);
+    sun.intensity = s.sun;
+    sun.diffuse.set(s.sunColor[0], s.sunColor[1], s.sunColor[2]);
+    sun.specular.copyFrom(sun.diffuse);
+    const sky = this.skyLight;
+    sky.intensity = s.sky;
+    sky.diffuse.set(s.skyColor[0], s.skyColor[1], s.skyColor[2]);
+    sky.groundColor.set(GROUND_LIGHT[0] * s.ground, GROUND_LIGHT[1] * s.ground, GROUND_LIGHT[2] * s.ground);
+  }
+
+  /** Sky and fog follow the mix of biomes where the player stands, tinted by the time of day. */
   private updateFog(frameDt: number): void {
     const p = this.player.feet;
     const mix = biomeWeights(this.model.def, p.x, p.z, this.biomeMix);
@@ -1456,8 +1504,15 @@ export class World {
     f.b = lerp(f.b, b, k);
     f.start = lerp(f.start, start, k);
     f.end = lerp(f.end, end, k);
-    this.scene.fogColor.set(f.r, f.g, f.b);
-    this.scene.clearColor.set(f.r, f.g, f.b, 1);
+    const tint = this.sky.fogTint;
+    const r2 = f.r * tint[0];
+    const g2 = f.g * tint[1];
+    const b2 = f.b * tint[2];
+    this.scene.fogColor.set(r2, g2, b2);
+    this.scene.clearColor.set(r2, g2, b2, 1);
+    const dome = this.graphics.level.skyDome;
+    if (dome !== this.domeOn) this.skyDome.enabled = this.domeOn = dome;
+    if (dome) this.skyDome.update(this.scene.fogColor, this.sky.zenith, this.sky.stars);
     this.scene.fogStart = f.start;
     this.scene.fogEnd = f.end;
   }
@@ -1649,6 +1704,7 @@ export class World {
     }
     if (this.tick % POSITION_SAVE_TICKS === 0 && this.player.state.grounded) this.savePosition();
     if (this.tick % (WAR.tickSeconds * 60) === 0 && !this.warPaused) this.warTick();
+    if (!this.skyPaused) this.save.sky.seconds += dt;
     perfEnd("step.world", t);
     t = perfStart();
     if (this.player.alive) {
@@ -1827,6 +1883,7 @@ export class World {
     // Streaming runs every frame, menus included, so the world is ready when play resumes.
     this.terrain.update(this.player.feet.x, this.player.feet.z);
     this.warmWaking();
+    this.updateSky();
     this.updateFog(playing ? frameDt : 0);
     let t = perfStart();
     for (const mech of this.mechs) {

@@ -15,12 +15,14 @@ export interface QualityDef {
   post: boolean;
   /** A glow around emissive parts: canopies, lights, flames and tracers. */
   glow: boolean;
+  /** A gradient sky with stars; without it the sky is one flat colour. */
+  skyDome: boolean;
 }
 
 export const QUALITY: Record<QualityLevel, QualityDef> = {
-  low: { label: "Low", shadowMap: 0, shadowRange: 0, surfaceDetail: false, particles: 0.4, post: false, glow: false },
-  medium: { label: "Medium", shadowMap: 1024, shadowRange: 70, surfaceDetail: true, particles: 1, post: true, glow: false },
-  high: { label: "High", shadowMap: 2048, shadowRange: 120, surfaceDetail: true, particles: 1.6, post: true, glow: true },
+  low: { label: "Low", shadowMap: 0, shadowRange: 0, surfaceDetail: false, particles: 0.4, post: false, glow: false, skyDome: false },
+  medium: { label: "Medium", shadowMap: 1024, shadowRange: 70, surfaceDetail: true, particles: 1, post: true, glow: false, skyDome: true },
+  high: { label: "High", shadowMap: 2048, shadowRange: 120, surfaceDetail: true, particles: 1.6, post: true, glow: true, skyDome: true },
 };
 
 /** The preset a new save starts on; it must hold 60 fps on the reference machine (phase 7). */

@@ -73,6 +73,14 @@ describe("parseSave", () => {
     expect(migrateSave(current)).toEqual(current);
   });
 
+  it("starts the clock in the morning for a save from before the time of day", () => {
+    const v5: Record<string, unknown> = { ...(JSON.parse(JSON.stringify(freshSave())) as Record<string, unknown>), version: 5 };
+    delete v5.sky;
+    expect(parseSave(v5).sky).toEqual({ seconds: 0, offset: 0 });
+    const kept = parseSave({ ...freshSave(), sky: { seconds: 900, offset: 120 } });
+    expect(kept.sky).toEqual({ seconds: 900, offset: 120 });
+  });
+
   it("drops invalid items and repairs a fit that points at nothing", () => {
     const save = parseSave({
       version: 2,

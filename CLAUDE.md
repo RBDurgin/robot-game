@@ -172,6 +172,9 @@ Key seams:
   every menu. E2E tests must not `waitTicks` after the step that ends a mission.
 - A site a mission is waiting to see cleared is frozen in the war (`awaitedSites`), so only
   the player can clear it.
+- The time of day runs during play (`save.sky`, `src/sim/sky.ts`). The e2e helper `startGame`
+  holds it at noon; pass `{ sky: false }` to let it run, and use `world.setTime` to change it.
+  Weather and night may only bring the fog in closer, never push it out past a biome's own.
 - Feedback strength (shake, landing thresholds, heat warning) is data in `src/data/feel.ts`.
 - A procedural part's node names are how models find their joints (`hip_l`, `knee_r`, `pivot`,
   `forearm`, `jet_l`...). Renaming one breaks the models that follow it; `GltfPartVisual` warns.
@@ -196,6 +199,9 @@ Open the game with `?procedural` in the URL to draw every mech part procedurally
 its model (for before-and-after comparisons). `__game.world.cameraRig.showcase = { yaw: 0.6,
 distance: 9, height: 1.2 }` looks at the player's mech from a fixed angle (null to stop), and
 `__game.world.graphics.apply("high")` switches the graphics preset.
+
+Open the game with `?time=night` (or `dusk`, `dawn`, `noon`, a fraction of a day) to set the time
+of day and hold it; `__game.world.setTime("dusk")` does the same from the console.
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
 and unlock every frame and mount.

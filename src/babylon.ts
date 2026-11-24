@@ -34,6 +34,7 @@ export { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 export { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
 
 export { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+export { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 export { ImageProcessingConfiguration } from "@babylonjs/core/Materials/imageProcessingConfiguration";
 export { Texture } from "@babylonjs/core/Materials/Textures/texture";
 export { RawTexture } from "@babylonjs/core/Materials/Textures/rawTexture";
