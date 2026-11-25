@@ -24,6 +24,8 @@ export const AUDIO = {
   servo: { gain: 0.045, pitch: 92, pitchRise: 50 },
   /** Background wind level. */
   wind: 0.035,
+  /** Weather: the wind rises by `wind` times its level in a full storm; rain and thunder levels. */
+  weather: { wind: 2.5, rain: 0.09, thunder: 0.7 },
   /** At most this many world sounds start within `voiceWindow` seconds; cockpit sounds always play. */
   maxVoices: 24,
   voiceWindow: 0.05,

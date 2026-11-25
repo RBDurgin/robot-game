@@ -10,7 +10,7 @@ import { isQualityLevel, QUALITY } from "../data/quality";
 import { PAD_CONTROLS } from "../data/gamepad";
 import type { SlotInfo } from "../game/saveStore";
 import type { WorldModel } from "../sim/terrain";
-import { drawMap, type MapSite, type MapTerritory } from "./mapView";
+import { drawMap, type MapFront, type MapSite, type MapTerritory } from "./mapView";
 import { buyItem, buyPrice, isSpare, repairBill, sellItem, sellPrice, type Wallet } from "../sim/economy";
 import { findItem, fitKit, fitProblems, fitToFrame, isPlatingItem, isWeaponItem, plainSpec, specKey, specName, tunedPlating, tunedWeapon, type Fit, type Item, type ItemSpec } from "../sim/items";
 import { fitsMount, itemName, kitStats, type ItemId } from "../sim/loadout";
@@ -124,6 +124,10 @@ export interface MapOptions {
   sites: MapSite[];
   /** Who controls each region. */
   territory: MapTerritory[];
+  /** Storm fronts on the move. */
+  fronts: MapFront[];
+  /** The weather where the player is, in words. */
+  weather: string;
   /** The factions at war and where the player stands with each. */
   factions: { name: string; style: string; color: string; standing: number; attitude: "hostile" | "neutral" | "allied"; sites: number }[];
   /** Number of places in the world, found or not. */
@@ -657,10 +661,10 @@ export class Screens {
     });
     const tag = (s: MapSite): string => (s.held ? " (held)" : s.owner ? ` (${s.owner}${s.hostile ? ", hostile" : ""})` : "") + (s.raided ? " · raid incoming" : "");
     const side = el("div", "mapSide", [
-      el("p", "", [`You are in ${opts.region}.`]),
+      el("p", "", [`You are in ${opts.region}. ${opts.weather}`]),
       el("h2", "", ["The war"]),
       el("ul", "factions", factions),
-      el("p", "dim", ["Regions take the colour of whoever holds most of them; stripes mean the region is fought over."]),
+      el("p", "dim", ["Regions take the colour of whoever holds most of them; stripes mean the region is fought over. Grey bands are storm fronts, with arrows the way they are blowing."]),
       el("h2", "", ["Fast travel"]),
       el("p", "dim", [opts.travelBlocked ?? "Travel to any base you hold, or an ally's."]),
       el("div", "travel", travel),

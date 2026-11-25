@@ -173,8 +173,11 @@ Key seams:
 - A site a mission is waiting to see cleared is frozen in the war (`awaitedSites`), so only
   the player can clear it.
 - The time of day runs during play (`save.sky`, `src/sim/sky.ts`). The e2e helper `startGame`
-  holds it at noon; pass `{ sky: false }` to let it run, and use `world.setTime` to change it.
+  holds it at a clear noon; pass `{ sky: false }` to let the clock and the weather run, and use
+  `world.setTime` and `world.setWeather` to change them.
   Weather and night may only bring the fog in closer, never push it out past a biome's own.
+- Storm fronts are a pure function of the world seed and `save.sky.seconds` (`src/sim/weather.ts`),
+  so they are not saved; a mission's skipped hours (`offset`) move the sun but not the weather.
 - The player's headlights are a spot light that always exists (intensity 0 when off). Do not
   create or enable lights during play: every material would recompile. Lamps on other mechs
   are meshes, not lights (`src/view/lamps.ts`). Unlit additive materials take their colour from
@@ -206,6 +209,9 @@ distance: 9, height: 1.2 }` looks at the player's mech from a fixed angle (null 
 
 Open the game with `?time=night` (or `dusk`, `dawn`, `noon`, a fraction of a day) to set the time
 of day and hold it; `__game.world.setTime("dusk")` does the same from the console.
+`?weather=rain` (or `dust`, `storm`, `clear`, a strength from 0 to 1) holds the weather at the
+player; `__game.world.setWeather("dust")` does the same, and `setWeather(null)` hands it back
+to the storm fronts (`__game.world.fronts`).
 
 Open the game with `?arsenal` in the URL to stock the hangar with two of every weapon and plating
 and unlock every frame and mount.

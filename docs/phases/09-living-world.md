@@ -79,6 +79,24 @@ makes the open world worth roaming.
   is in `src/data/lights.ts`. With post-processing (Medium, High) additive light blends in
   linear space, so beams look several times stronger than their alpha; they are tuned for
   Medium and are fainter on Low.
+- Step 3 (storm fronts). `src/sim/weather.ts`: play time is cut into slots
+  (`WEATHER.slot`), and each may start one front, chosen from the world seed and the slot
+  number. A front is a long elliptical band that crosses the world in a straight line, strongest
+  in its middle and fading over its outer edge. `frontsAt(seed, seconds)` lists those on the
+  move; `weatherAt` gives the storm at a place, split into rain and dust by the biome mix there
+  (`WEATHER.kinds`), so a front turns from rain to dust as it crosses onto the salt flats.
+  The weather follows `save.sky.seconds`, not the offset, so nothing new is saved and skipped
+  time leaves it alone. As tuned, a place is stormy about a fifth to a third of the time, a
+  storm every 20 to 30 minutes, lasting 5 to 6. `weatherFog` only ever brings the fog in and
+  turns it toward the storm's colour; `weatherLight` dims sun and fill light. The player's
+  weather eases toward the weather where they stand. Under a storm the sky dome goes flat and
+  starless. Rain streaks and blown dust are two particle systems that follow the camera
+  (`src/view/weather.ts`), scaled by the graphics preset and idle in clear weather. Heavy rain
+  brings lightning (a flash of the fill light and fog) and thunder delayed by distance. Rain
+  hisses and a storm raises the wind (`AUDIO.weather`). The HUD names a storm and says when one
+  arrives; the map draws the fronts with arrows the way they blow. `?weather=rain` (or `dust`,
+  `storm`, `clear`, a strength) holds the weather at the player; `world.setWeather(...)` does
+  the same, and `setWeather(null)` gives it back to the fronts. `startGame` holds it clear.
 
 ## Out of scope
 
@@ -114,7 +132,7 @@ Seasons, temperature affecting heat, a thermal vision mode, real lights on every
 - [x] Decisions settled
 - [x] Sky clock, lights, fog tint, sky dome
 - [x] Night: headlights and lamps
-- [ ] Storm fronts
+- [x] Storm fronts
 - [ ] Visibility rules
 - [ ] Convoys
 - [ ] Supply drops

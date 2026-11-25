@@ -121,11 +121,70 @@ export interface MapSite {
   raided: boolean;
 }
 
+/** A storm front as the map draws it. */
+export interface MapFront {
+  x: number;
+  z: number;
+  /** Which way it is going (yaw). */
+  heading: number;
+  halfLength: number;
+  halfDepth: number;
+  strength: number;
+}
+
 export interface MapContent {
   model: WorldModel;
   player: { x: number; z: number; yaw: number };
   sites: MapSite[];
   territory: MapTerritory[];
+  fronts: MapFront[];
+}
+
+/** Storm fronts: grey bands, darkest in the middle, with an arrow the way they are going. */
+function drawFronts(ctx: CanvasRenderingContext2D, fronts: MapFront[], w: number, size: number): void {
+  const k = w / size;
+  for (const f of fronts) {
+    const x = ((f.x + size / 2) / size) * w;
+    const y = ((size / 2 - f.z) / size) * w;
+    ctx.save();
+    ctx.translate(x, y);
+    // Rotated so that up is the way it travels: its depth runs up and down, its length across.
+    ctx.rotate(f.heading);
+    ctx.save();
+    ctx.scale(f.halfLength * k, f.halfDepth * k);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, `rgba(26, 32, 44, ${0.8 * f.strength})`);
+    g.addColorStop(0.5, `rgba(34, 40, 54, ${0.6 * f.strength})`);
+    g.addColorStop(1, "rgba(40, 46, 60, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // A dashed line roughly where the storm is strong enough to notice.
+    ctx.save();
+    ctx.scale(f.halfLength * k, f.halfDepth * k);
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.72, 0, Math.PI * 2);
+    ctx.restore();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = "rgba(225, 232, 245, 0.6)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const a = w / 45;
+    ctx.strokeStyle = "rgba(235, 240, 248, 0.85)";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(0, a);
+    ctx.lineTo(0, -a);
+    ctx.moveTo(-a * 0.5, -a * 0.45);
+    ctx.lineTo(0, -a);
+    ctx.lineTo(a * 0.5, -a * 0.45);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 const UNHELD_COLOR = "#f2e9c9";
@@ -141,6 +200,7 @@ export function drawMap(canvas: HTMLCanvasElement, content: MapContent): void {
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(terrainPicture(model), 0, 0, w, w);
   ctx.drawImage(territoryPicture(model, content.territory), 0, 0, w, w);
+  drawFronts(ctx, content.fronts, w, size);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";

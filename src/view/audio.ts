@@ -33,6 +33,8 @@ export class Sfx {
   private noise: AudioBuffer | null = null;
   private thrust: { rumble: GainNode; hiss: GainNode } | null = null;
   private servo: { osc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode } | null = null;
+  private wind: GainNode | null = null;
+  private rain: GainNode | null = null;
   private volume = 0.6;
   private listener = { x: 0, y: 0, z: 0, yaw: 0 };
   /** Start times of recent voices, to cap how many begin at once in a big fight. */
@@ -70,7 +72,8 @@ export class Sfx {
 
       this.thrust = this.startThrust(ctx);
       this.servo = this.startServo(ctx);
-      this.startWind(ctx);
+      this.wind = this.startWind(ctx);
+      this.rain = this.startRain(ctx);
     } catch {
       this.ctx = null; // No audio device or API: stay silent.
     }
@@ -228,13 +231,36 @@ export class Sfx {
     this.servo.filter.frequency.setTargetAtTime(350 + level * 500, t, 0.2);
   }
 
+  /** Weather where the player is, 0..1 each: rain hisses, and any storm raises the wind. */
+  setWeather(rain: number, dust: number): void {
+    if (!this.ctx || !this.wind || !this.rain) return;
+    const t = this.ctx.currentTime;
+    const storm = Math.min(1, rain + dust);
+    this.wind.gain.setTargetAtTime(AUDIO.wind * (1 + AUDIO.weather.wind * storm), t, 0.8);
+    this.rain.gain.setTargetAtTime(AUDIO.weather.rain * rain, t, 0.8);
+  }
+
+  /** Thunder `delay` seconds after the flash (sound is slower than light), `strength` 0..1. */
+  thunder(delay: number, strength: number): void {
+    const v = this.voice(null, 1, delay + 6);
+    if (!v) return;
+    const { bus } = v;
+    const t = v.t + delay;
+    const g = AUDIO.weather.thunder * strength;
+    // A near strike cracks first; a far one is only the roll.
+    if (delay < 1.5) this.noise_(bus, t, { dur: 0.25, gain: g * 0.8, filter: "bandpass", freq: 1400, q: 0.7 });
+    this.noise_(bus, t + 0.05, { dur: 2.6 + delay * 0.4, gain: g, filter: "lowpass", freq: 260, attack: 0.15 });
+    this.osc(bus, t, { type: "sine", f0: 55, f1: 28, dur: 2.2, gain: g * 0.6, attack: 0.2 });
+    for (let i = 0; i < 3; i++) this.noise_(bus, t + 0.5 + Math.random() * 1.6, { dur: 0.8, gain: g * 0.4, filter: "lowpass", freq: 420, attack: 0.1 });
+  }
+
   // --- Building blocks ---
 
   /**
    * A bus for one sound at a place in the world, and when it starts. Null when silent, too
    * quiet to hear, or when too many sounds began in the last instant.
    */
-  private voice(at: SoundAt, loudness = 1): { bus: AudioNode; t: number } | null {
+  private voice(at: SoundAt, loudness = 1, hold = 3): { bus: AudioNode; t: number } | null {
     const ctx = this.ctx;
     if (!ctx || !this.master || !this.reverb) return null;
     const p = at ? this.place(at) : NEAR;
@@ -259,7 +285,7 @@ export class Sfx {
     window.setTimeout(() => {
       input.disconnect();
       send.disconnect();
-    }, (p.delay + 3) * 1000);
+    }, (p.delay + hold) * 1000);
     return { bus: input, t: now + p.delay };
   }
 
@@ -393,7 +419,7 @@ export class Sfx {
   }
 
   /** Wind: band-passed noise whose pitch and level drift slowly. */
-  private startWind(ctx: AudioContext): void {
+  private startWind(ctx: AudioContext): GainNode {
     const filter = ctx.createBiquadFilter();
     filter.type = "bandpass";
     filter.frequency.value = 380;
@@ -413,5 +439,25 @@ export class Sfx {
     this.loop(ctx).connect(filter).connect(gain).connect(this.master!);
     drift.start();
     swell.start();
+    return gain;
+  }
+
+  /** Rain: a high, soft hiss over a duller patter, silent until setWeather raises it. */
+  private startRain(ctx: AudioContext): GainNode {
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const hiss = ctx.createBiquadFilter();
+    hiss.type = "bandpass";
+    hiss.frequency.value = 5200;
+    hiss.Q.value = 0.5;
+    this.loop(ctx).connect(hiss).connect(gain);
+    const patter = ctx.createBiquadFilter();
+    patter.type = "lowpass";
+    patter.frequency.value = 1100;
+    const patterGain = ctx.createGain();
+    patterGain.gain.value = 0.6;
+    this.loop(ctx).connect(patter).connect(patterGain).connect(gain);
+    gain.connect(this.master!);
+    return gain;
   }
 }

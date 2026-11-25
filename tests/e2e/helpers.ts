@@ -16,8 +16,8 @@ export async function boot(page: Page, url = "/"): Promise<string[]> {
 
 /**
  * Dismiss the start screen so the simulation runs. A new pilot's first mission opens with
- * training stages; they are skipped unless `training` is set. The time of day is held at noon
- * unless `sky` is false.
+ * training stages; they are skipped unless `training` is set. The time of day is held at a clear
+ * noon unless `sky` is false.
  */
 export async function startGame(page: Page, { training = false, sky = true } = {}): Promise<void> {
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
@@ -28,6 +28,7 @@ export async function startGame(page: Page, { training = false, sky = true } = {
     const w = window.__game!.world;
     w.setTime("noon");
     w.skyPaused = true;
+    w.setWeather("clear");
   });
 }
 

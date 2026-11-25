@@ -41,6 +41,9 @@ import { biomeWeights, heightAt, regionAt, type Site, type WorldModel } from "..
 import { buildWorldModel } from "../sim/worldgen";
 import { darkness, lampsWanted, parseTime, skipTo, skyAt, timeOfDay, type SkyState } from "../sim/sky";
 import { LIGHTS } from "../data/lights";
+import { WEATHER } from "../data/weather";
+import { CLEAR, forceWeather, frontsAt, parseWeather, weatherAt, weatherFog, weatherLight, weatherName, type ForcedWeather, type Front, type WeatherSample } from "../sim/weather";
+import { WeatherEffects } from "../view/weather";
 import { Sfx } from "../view/audio";
 import { Effects } from "../view/effects";
 import { isActionId, type ActionId } from "../data/controls";
@@ -142,6 +145,12 @@ export class World {
   skyPaused = false;
   /** The light and colours of the sky this frame. */
   sky: SkyState;
+  /** Storm fronts on the move this frame. */
+  fronts: Front[] = [];
+  /** The weather where the player is, as shown this frame (eased toward the true weather). */
+  weather: WeatherSample = CLEAR;
+  /** Weather held at the player by `?weather=` or `setWeather`, instead of the fronts'. */
+  weatherForced: ForcedWeather | null = null;
   /** Test hook: fields set here replace the player's real input. */
   intentOverride: Partial<Intent> | null = null;
   /** Hostile mech currently under the crosshair. */
@@ -177,6 +186,11 @@ export class World {
   private readonly biomeMix = new Float32Array(BIOME_IDS.length);
   private readonly sunLight: DirectionalLight;
   private readonly skyLight: HemisphericLight;
+  private readonly weatherEffects: WeatherEffects;
+  /** Brightness of a lightning flash, fading to 0. */
+  private lightning = 0;
+  /** The player has been told about the storm they are in. */
+  private stormNoticed = false;
   /** The player's headlights: made once at start-up and dimmed to nothing when off, so no shader recompiles. */
   private readonly headlight: SpotLight;
   /** The player's headlights are on. Kept here, as the player's mech is replaced on a refit. */
@@ -211,6 +225,9 @@ export class World {
       this.skyPaused = true;
     }
     this.sky = skyAt(timeOfDay(save.sky));
+    // `?weather=rain` (or dust, storm, clear, or a strength) holds the weather at the player.
+    this.weatherForced = parseWeather(new URLSearchParams(location.search).get("weather"));
+    this.weatherEffects = new WeatherEffects(scene);
     this.graphics = new Graphics(scene, this.sunLight, cameraRig.camera, hud.ui);
     this.cockpit = new Cockpit(scene, cameraRig.camera, getPartMaterials(scene, FACTIONS[PLAYER_FACTION].colors));
     this.salvage = new SalvageField(scene);
@@ -329,6 +346,7 @@ export class World {
       if (this.mode === "playing" && this.started) this.pause();
     });
 
+    this.updateWeather(Infinity);
     this.updateSky();
     this.updateFog(Infinity);
     this.pause();
@@ -714,6 +732,7 @@ export class World {
     this.sfx.setVolume(settings.volume);
     this.graphics.apply(settings.quality);
     this.effects.particles.scale = QUALITY[settings.quality].particles;
+    this.weatherEffects.scale = QUALITY[settings.quality].particles;
     this.input.bindings = settings.bindings;
     this.input.sprintToggle = settings.sprintToggle;
     this.cameraRig.shakeScale = settings.shake;
@@ -1276,6 +1295,8 @@ export class World {
           };
         }),
       territory: Object.entries(control).map(([regionId, c]) => ({ regionId, color: tint(c.owner), contested: c.contested })),
+      fronts: this.fronts,
+      weather: this.weatherText() ? `${this.weatherText()} overhead.` : this.fronts.length > 0 ? "Clear here." : "Clear skies everywhere.",
       factions: WAR_FACTION_IDS.map((f) => ({
         name: FACTIONS[f].name,
         style: FACTIONS[f].style,
@@ -1483,6 +1504,61 @@ export class World {
     this.updateSky();
   }
 
+  /**
+   * Hold the weather at the player: "clear", "storm", "rain", "dust" or a strength from 0 to 1.
+   * Null lets the fronts decide again.
+   */
+  setWeather(weather: string | number | null): void {
+    if (weather === null) {
+      this.weatherForced = null;
+      return;
+    }
+    const forced = parseWeather(weather);
+    if (!forced) throw new Error(`Not a weather: ${weather}`);
+    this.weatherForced = forced;
+  }
+
+  /** The fronts move with play time; the player's weather eases toward the weather where they stand. */
+  private updateWeather(frameDt: number): void {
+    const def = this.model.def;
+    const p = this.player.feet;
+    this.fronts = frontsAt(def.seed, this.save.sky.seconds);
+    const natural = weatherAt(def, this.fronts, p.x, p.z);
+    const target = this.weatherForced ? forceWeather(def, natural, this.weatherForced, p.x, p.z) : natural;
+    const k = Math.min(1, frameDt * FOG_RATE);
+    const w = this.weather;
+    const rain = lerp(w.rain, target.rain, k);
+    const dust = lerp(w.dust, target.dust, k);
+    this.weather = { storm: rain + dust, rain, dust, heading: target.wind > 0 ? target.heading : w.heading, wind: lerp(w.wind, target.wind, k) };
+  }
+
+  /** Lightning in heavy rain: a flash now, thunder later the further off it struck. */
+  private updateLightning(frameDt: number): void {
+    this.lightning = Math.max(0, this.lightning - frameDt * 7);
+    const above = WEATHER.lightningAbove;
+    const heavy = (this.weather.rain - above) / (1 - above);
+    if (heavy <= 0 || Math.random() >= WEATHER.lightningRate * heavy * frameDt) return;
+    const distance = 300 + Math.random() * 2200;
+    this.lightning = Math.max(this.lightning, 1 - distance / 3500);
+    this.sfx.thunder(distance / 343, Math.max(0.3, 1 - distance / 3000));
+  }
+
+  /** Tell the player once when a storm reaches them, and name it in the HUD while it lasts. */
+  private weatherText(): string | null {
+    const name = weatherName(this.weather);
+    return name === "rain" ? "Rainstorm" : name === "dust" ? "Dust storm" : null;
+  }
+
+  private noticeStorm(): void {
+    const storm = this.weather.storm;
+    if (!this.stormNoticed && storm > WEATHER.hudAbove + 0.15) {
+      this.stormNoticed = true;
+      if (!this.message) this.notify(weatherName(this.weather) === "dust" ? "A dust storm is blowing in." : "A rainstorm is sweeping in.", 4);
+    } else if (this.stormNoticed && storm < WEATHER.hudAbove) {
+      this.stormNoticed = false;
+    }
+  }
+
   /** The headlights shine from the player's chest along the aim, while they are on. */
   private updateHeadlight(): void {
     const light = this.headlight;
@@ -1506,11 +1582,12 @@ export class World {
     const s = (this.sky = skyAt(timeOfDay(this.save.sky)));
     const sun = this.sunLight;
     sun.direction.set(s.lightDir.x, s.lightDir.y, s.lightDir.z);
-    sun.intensity = s.sun;
+    const through = weatherLight(this.weather);
+    sun.intensity = s.sun * through.sun;
     sun.diffuse.set(s.sunColor[0], s.sunColor[1], s.sunColor[2]);
     sun.specular.copyFrom(sun.diffuse);
     const sky = this.skyLight;
-    sky.intensity = s.sky;
+    sky.intensity = s.sky * through.sky + this.lightning * 1.6;
     sky.diffuse.set(s.skyColor[0], s.skyColor[1], s.skyColor[2]);
     sky.groundColor.set(GROUND_LIGHT[0] * s.ground, GROUND_LIGHT[1] * s.ground, GROUND_LIGHT[2] * s.ground);
   }
@@ -1540,17 +1617,26 @@ export class World {
     f.b = lerp(f.b, b, k);
     f.start = lerp(f.start, start, k);
     f.end = lerp(f.end, end, k);
+    const w = this.weather;
+    const thick = weatherFog(f.start, f.end, [f.r, f.g, f.b], w);
     const tint = this.sky.fogTint;
-    const r2 = f.r * tint[0];
-    const g2 = f.g * tint[1];
-    const b2 = f.b * tint[2];
+    // A flash of lightning lights up the murk.
+    const flash = 1 + this.lightning * 1.2;
+    const r2 = Math.min(1, thick.color[0] * tint[0] * flash);
+    const g2 = Math.min(1, thick.color[1] * tint[1] * flash);
+    const b2 = Math.min(1, thick.color[2] * tint[2] * flash);
     this.scene.fogColor.set(r2, g2, b2);
     this.scene.clearColor.set(r2, g2, b2, 1);
     const dome = this.graphics.level.skyDome;
     if (dome !== this.domeOn) this.skyDome.enabled = this.domeOn = dome;
-    if (dome) this.skyDome.update(this.scene.fogColor, this.sky.zenith, this.sky.stars);
-    this.scene.fogStart = f.start;
-    this.scene.fogEnd = f.end;
+    if (dome) {
+      // Under a storm the sky is one flat murk, with no stars.
+      const z = this.sky.zenith;
+      const flat = Math.min(1, w.storm * 1.2);
+      this.skyDome.update(this.scene.fogColor, [lerp(z[0], 1, flat), lerp(z[1], 1, flat), lerp(z[2], 1, flat)], this.sky.stars * (1 - flat));
+    }
+    this.scene.fogStart = thick.start;
+    this.scene.fogEnd = thick.end;
   }
 
   // --- Encounter ---
@@ -1892,6 +1978,8 @@ export class World {
     if (this.headlightsOn) lines.push(`Press ${k("lights")}: headlights off`);
     else if (this.sky.light < LIGHTS.hintBelow) lines.push(`Press ${k("lights")}: headlights`);
     lines.push(`Scrap ${this.save.scrap}`);
+    const weather = this.weatherText();
+    if (weather) lines.push(weather);
     lines.push(`${this.region.name} (${this.regionHolder()}) · ${k("map")}: map`);
     if (this.wingmen.size > 0) lines.push(`Wingmen: ${this.wingmen.size} · ${k("wing")}: release`);
     else if (this.alliesNear) lines.push(`Press ${k("wing")}: call wingmen`);
@@ -1921,6 +2009,11 @@ export class World {
     // Streaming runs every frame, menus included, so the world is ready when play resumes.
     this.terrain.update(this.player.feet.x, this.player.feet.z);
     this.warmWaking();
+    this.updateWeather(playing ? frameDt : 0);
+    if (playing) {
+      this.updateLightning(frameDt);
+      this.noticeStorm();
+    }
     this.updateSky();
     this.updateFog(playing ? frameDt : 0);
     let t = perfStart();
@@ -1941,8 +2034,11 @@ export class World {
       const s = this.player.state;
       this.sfx.setThrust(!this.player.alive ? 0 : s.boostTime > 0 ? 1 : s.jetting ? 0.7 : 0);
       this.sfx.setServo(this.player.alive && s.grounded ? Math.min(1, this.player.horizontalSpeed / this.player.frame.sprintSpeed) : 0);
+      this.sfx.setWeather(this.weather.rain, this.weather.dust);
+      this.weatherEffects.update(this.cameraRig.camera.position, this.weather);
     } else {
       this.sfx.setServo(0);
+      this.weatherEffects.idle();
     }
     const ears = this.cameraRig.camera.position;
     this.sfx.setListener(ears.x, ears.y, ears.z, this.input.yaw);
